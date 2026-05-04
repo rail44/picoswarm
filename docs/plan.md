@@ -12,7 +12,7 @@ A personal-use tool for the project owner. Single user, on Linux, running kitty.
 
 Required behaviors:
 
-1. Spawn a Claude Code session under picoswarm's session daemon, optionally with a working directory (e.g. a git worktree).
+1. Spawn a Claude Code session under picoswarm's session daemon. The agent inherits the directory the user runs `pswarm run` from, so working in a git worktree is just a `cd` away — picoswarm itself does not manage worktrees.
 2. List currently registered agents with their status.
 3. Re-attach to a previously spawned agent from any terminal and interact with it normally. Window placement is the user's responsibility (e.g. opening a new kitty tab manually and running `pswarm attach <name>` inside it).
 4. Detach from an attached agent without killing it.

@@ -9,7 +9,7 @@ build:
 # Build (incrementally) and run pswarm with the given arguments.
 # Examples: `just dev doctor`, `just dev daemon restart`, `just dev run feat -- /bin/sh`.
 dev *args:
-    cargo run --quiet -- {{args}}
+    cargo run --quiet {{args}}
 
 # Run all tests (unit + integration).
 test:

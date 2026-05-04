@@ -2,17 +2,11 @@
 //! by default (or just print the assigned id when `--detach` is set).
 
 use anyhow::{Result, anyhow, bail};
-use std::path::PathBuf;
 
 use crate::client::{attach, connection};
 use crate::protocol::{self, ClientToDaemon, DaemonToClient, RunRequest, TermSize};
 
-pub async fn run(
-    name: String,
-    worktree: Option<PathBuf>,
-    detach: bool,
-    cmd: Vec<String>,
-) -> Result<()> {
+pub async fn run(name: String, detach: bool, cmd: Vec<String>) -> Result<()> {
     validate_name(&name)?;
 
     // The agent is spawned independently of this client process. Use a
@@ -21,10 +15,17 @@ pub async fn run(
     // it connects.
     let initial_size = TermSize { rows: 24, cols: 80 };
 
+    // The agent inherits the directory the user ran `pswarm run` from.
+    // Without this, portable-pty falls back to $HOME because the daemon's
+    // own cwd is `/` after daemonize. If the user wants a different
+    // directory, they `cd` there first — picoswarm doesn't manage
+    // worktrees itself.
+    let cwd = std::env::current_dir().ok();
+
     let request = RunRequest {
         name: name.clone(),
         cmd,
-        cwd: worktree,
+        cwd,
         env: Vec::new(),
         initial_size,
     };

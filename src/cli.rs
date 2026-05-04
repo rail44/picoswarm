@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -16,15 +15,14 @@ pub struct Cli {
 pub enum Command {
     /// Run a new agent under the picoswarm daemon.
     ///
-    /// By default, attaches to the new agent in the current terminal
-    /// (mirroring `docker run`). Use `-d` / `--detach` to spawn without
-    /// attaching.
+    /// The agent inherits the current working directory; `cd` first if
+    /// you want it to start somewhere else (a git worktree, a sibling
+    /// repo, …). By default, attaches to the new agent in the current
+    /// terminal (mirroring `docker run`); use `-d` / `--detach` to spawn
+    /// without attaching.
     Run {
         /// Human-friendly name for the agent.
         name: String,
-        /// Working directory the agent should start in (e.g. a git worktree).
-        #[arg(long)]
-        worktree: Option<PathBuf>,
         /// Spawn the agent and return immediately instead of attaching.
         #[arg(long, short)]
         detach: bool,

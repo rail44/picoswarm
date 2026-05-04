@@ -17,7 +17,7 @@ picoswarm is a self-contained agent orchestrator. It owns a small PTY daemon to 
 
 In scope:
 
-- Agent registry (id / name / worktree / parent-child / tags / status / session handle)
+- Agent registry (id / name / cwd / parent-child / tags / status / session handle)
 - Agent lifecycle operations (spawn / list / attach / detach / send / kill / link)
 - A built-in PTY session daemon (one PTY per agent, kept alive across CLI invocations)
 
@@ -38,7 +38,7 @@ picoswarm is a single binary that operates in two roles:
 Components:
 
 - **daemon**: Holds PTYs via `portable-pty`. Multiplexes I/O between PTYs and connected clients. Maintains per-session output ring buffers so a reattaching client can see recent output.
-- **registry**: The daemon's in-memory map from agent id/name to session metadata (name, worktree, status, etc.). Encapsulated by a `Registry` struct. Not persisted to disk: when the daemon dies, its agent processes die with it, so the registry has nothing meaningful to outlive. Persistence may be added later if a use case appears that justifies it.
+- **registry**: The daemon's in-memory map from agent id/name to session metadata (name, cwd, status, etc.). Encapsulated by a `Registry` struct. Not persisted to disk: when the daemon dies, its agent processes die with it, so the registry has nothing meaningful to outlive. Persistence may be added later if a use case appears that justifies it.
 - **adapter (PaneHost)**: Abstraction over the user's terminal/multiplexer for opening, focusing, and closing the windows that host attached clients. Implemented as the `PaneHost` trait, fully decoupled from core. First-class adapter: kitty.
 - **single-binary CLI**: An agent (Claude Code itself) must be able to operate its own orchestrator via the `pswarm` command. Do not implement this as a fish/bash function (subshells cannot invoke it).
 
@@ -94,7 +94,7 @@ If you are about to propose something that violates one of these — for "simpli
 - **daemon**: The long-lived `pswarm daemon` process that owns all PTYs and serves clients over a Unix socket.
 - **client**: A short-lived `pswarm <subcommand>` invocation that talks to the daemon.
 - **adapter (PaneHost)**: Abstraction over an external tool (kitty, wezterm, etc.) that opens, focuses, and closes the windows hosting attached clients.
-- **worktree**: A git worktree. The isolation unit when an agent is given its own working directory.
+- **cwd**: The working directory the agent process starts in. The user is responsible for placing themselves in the right directory (e.g. a git worktree) before running `pswarm run` — picoswarm does not manage worktrees itself.
 
 ---
 
