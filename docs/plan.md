@@ -65,9 +65,13 @@ These need to be settled before or during MVP implementation. Listed in the orde
 1. **PTY size and resize when no client is attached.** Defaults are captured in `docs/protocol.md` (initial 80x24, client reports its size on attach). Still open: when the only attached client disconnects, does the daemon keep the last reported size on the PTY, or reset to 80x24? Working assumption: keep last size; revisit if a use case shows it matters.
 2. **Config file.** TOML at `$XDG_CONFIG_HOME/picoswarm/config.toml`. Likely not needed for MVP — defaults plus CLI flags should be enough. Add only when a setting needs to persist between invocations.
 
+### Known limitations
+
+- **Detach key does not work when the agent has enabled an extended keyboard protocol** (kitty keyboard protocol, CSI-u, etc.). In that mode the local terminal encodes `Ctrl-\` as an escape sequence (e.g. `\e[28;5u`) instead of byte `0x1c`, and the client only watches for the raw byte. Claude Code in particular triggers this. Workaround for now: run the agent with whatever flag disables that mode, or kill the agent and start a fresh attach. Future fix candidate: switch to a prefix-then-key detach (e.g. `Ctrl-Q Q`) that survives keyboard-protocol re-encoding.
+
 ### Resolved (captured here for visibility)
 
-- Detach key: `Ctrl-\` (byte `0x1c`). Matches abduco; avoids tmux/ssh collisions.
+- Detach key: `Ctrl-\` (byte `0x1c`). Matches abduco; avoids tmux/ssh collisions. Subject to the limitation noted above.
 - Ring buffer size: 64 KB per session, in-memory only.
 - Encoding: `postcard` (replaced `bincode`, which is unmaintained per RUSTSEC-2025-0141).
 - Registry persistence: **none for MVP**. The daemon holds the agent map in memory; when the daemon dies its child processes die too, so there is nothing meaningful to persist. Add a JSON-on-disk store (or similar) if a future use case justifies it.
