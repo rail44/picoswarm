@@ -1,1 +1,5 @@
+# Cargo build output
 /target
+
+# Personal Claude Code overrides for this project
+.claude/settings.local.json
