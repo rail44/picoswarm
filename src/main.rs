@@ -15,12 +15,25 @@ fn main() -> anyhow::Result<()> {
             init_client_tracing();
             client_runtime().block_on(client::doctor::run())
         }
-        cli::Command::Run { .. }
-        | cli::Command::Ls { .. }
-        | cli::Command::Attach { .. }
-        | cli::Command::Rm { .. } => {
+        cli::Command::Run {
+            name,
+            worktree,
+            cmd,
+        } => {
             init_client_tracing();
-            anyhow::bail!("not implemented yet")
+            client_runtime().block_on(client::run::run(name, worktree, cmd))
+        }
+        cli::Command::Ls { json } => {
+            init_client_tracing();
+            client_runtime().block_on(client::ls::run(json))
+        }
+        cli::Command::Rm { name, force } => {
+            init_client_tracing();
+            client_runtime().block_on(client::rm::run(name, force))
+        }
+        cli::Command::Attach { .. } => {
+            init_client_tracing();
+            anyhow::bail!("attach is not implemented yet")
         }
     }
 }

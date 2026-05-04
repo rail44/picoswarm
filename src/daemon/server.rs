@@ -6,13 +6,14 @@ use std::path::PathBuf;
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{info, warn};
 
+use crate::daemon::registry::Registry;
+use crate::daemon::session;
 use crate::protocol::{
-    self, ClientToDaemon, DaemonToClient, ErrorCode, PROTOCOL_VERSION,
+    self, ClientToDaemon, DaemonToClient, ErrorCode, RunRequest, PROTOCOL_VERSION,
 };
 
 pub async fn run(socket_path: PathBuf) -> Result<()> {
-    // Single-instance check: if the socket file is already there, see
-    // whether a daemon is actually answering on it.
+    // Single-instance check.
     if socket_path.exists() {
         match UnixStream::connect(&socket_path).await {
             Ok(_) => {
@@ -23,10 +24,7 @@ pub async fn run(socket_path: PathBuf) -> Result<()> {
                 return Ok(());
             }
             Err(_) => {
-                warn!(
-                    "removing stale socket at {}",
-                    socket_path.display()
-                );
+                warn!("removing stale socket at {}", socket_path.display());
                 std::fs::remove_file(&socket_path).with_context(|| {
                     format!("failed to remove stale socket {}", socket_path.display())
                 })?;
@@ -40,23 +38,28 @@ pub async fn run(socket_path: PathBuf) -> Result<()> {
         .with_context(|| format!("failed to chmod 0600 on {}", socket_path.display()))?;
     info!("listening on {}", socket_path.display());
 
+    let registry = Registry::new();
+
     loop {
         let (stream, _) = listener.accept().await?;
-        tokio::spawn(handle_connection(stream));
+        let reg = registry.clone();
+        tokio::spawn(handle_connection(stream, reg));
     }
 }
 
-async fn handle_connection(mut stream: UnixStream) {
-    if let Err(e) = handle_connection_inner(&mut stream).await {
+async fn handle_connection(mut stream: UnixStream, registry: Registry) {
+    if let Err(e) = handle_connection_inner(&mut stream, registry).await {
         warn!("connection ended: {e:#}");
     }
 }
 
-async fn handle_connection_inner(stream: &mut UnixStream) -> Result<()> {
+async fn handle_connection_inner(
+    stream: &mut UnixStream,
+    registry: Registry,
+) -> Result<()> {
     let (mut reader, mut writer) = stream.split();
 
-    // Hello handshake. The first message must be a Hello with a matching
-    // protocol version, otherwise the daemon refuses and closes.
+    // Hello handshake.
     let hello: ClientToDaemon = protocol::read_msg(&mut reader).await?;
     match hello {
         ClientToDaemon::Hello { protocol_version } if protocol_version == PROTOCOL_VERSION => {
@@ -94,30 +97,75 @@ async fn handle_connection_inner(stream: &mut UnixStream) -> Result<()> {
         }
     }
 
-    // Process one request and respond. Streaming attach lives in a future
-    // commit; for now the daemon closes the connection after one round-trip.
+    // Process one request and respond, then close. Streaming attach lives
+    // in a future commit.
     let msg: ClientToDaemon = protocol::read_msg(&mut reader).await?;
-    let response = handle_message(msg);
+    let response = handle_message(msg, &registry).await;
     protocol::write_msg(&mut writer, &response).await?;
     Ok(())
 }
 
-fn handle_message(msg: ClientToDaemon) -> DaemonToClient {
+async fn handle_message(msg: ClientToDaemon, registry: &Registry) -> DaemonToClient {
     match msg {
         ClientToDaemon::Ping => DaemonToClient::Pong,
+
+        ClientToDaemon::Run(req) => handle_run(req, registry).await,
+
+        ClientToDaemon::Ls => DaemonToClient::AgentList(registry.refresh_and_list()),
+
+        ClientToDaemon::Rm { name, force } => match registry.remove(&name, force) {
+            Some(_) => DaemonToClient::Ok,
+            None => DaemonToClient::Error {
+                code: ErrorCode::NotFound,
+                message: format!("no agent named {name}"),
+            },
+        },
+
         ClientToDaemon::Hello { .. } => DaemonToClient::Error {
             code: ErrorCode::Internal,
             message: "Hello already exchanged".into(),
         },
-        ClientToDaemon::Run(_)
-        | ClientToDaemon::Ls
-        | ClientToDaemon::Attach { .. }
+
+        ClientToDaemon::Attach { .. }
         | ClientToDaemon::Detach
         | ClientToDaemon::Resize(_)
-        | ClientToDaemon::Stdin(_)
-        | ClientToDaemon::Rm { .. } => DaemonToClient::Error {
+        | ClientToDaemon::Stdin(_) => DaemonToClient::Error {
             code: ErrorCode::Internal,
             message: "not implemented yet".into(),
         },
     }
+}
+
+async fn handle_run(req: RunRequest, registry: &Registry) -> DaemonToClient {
+    let name = req.name.clone();
+
+    // Spawning is blocking work (PTY syscalls, fork). Run it on the
+    // blocking pool so we do not stall the async runtime.
+    let entry_result = tokio::task::spawn_blocking(move || session::spawn_session(req)).await;
+
+    let entry = match entry_result {
+        Ok(Ok(entry)) => entry,
+        Ok(Err(e)) => {
+            return DaemonToClient::Error {
+                code: ErrorCode::SpawnFailed,
+                message: format!("{e:#}"),
+            };
+        }
+        Err(e) => {
+            return DaemonToClient::Error {
+                code: ErrorCode::Internal,
+                message: format!("spawn task panicked: {e}"),
+            };
+        }
+    };
+
+    let id = entry.id;
+    if let Err(e) = registry.insert(entry) {
+        return DaemonToClient::Error {
+            code: ErrorCode::NameTaken,
+            message: format!("{e:#}"),
+        };
+    }
+
+    DaemonToClient::RunResult { id, name }
 }

@@ -1,0 +1,57 @@
+//! `pswarm run`: ask the daemon to spawn a new agent.
+
+use anyhow::{anyhow, bail, Result};
+use std::path::PathBuf;
+
+use crate::client::connection;
+use crate::protocol::{
+    self, ClientToDaemon, DaemonToClient, RunRequest, TermSize,
+};
+
+pub async fn run(name: String, worktree: Option<PathBuf>, cmd: Vec<String>) -> Result<()> {
+    validate_name(&name)?;
+
+    // The agent is spawned independently of this client process, so the
+    // local terminal size is irrelevant. Use a sensible default; the
+    // attaching client will resize the PTY when it connects.
+    let initial_size = TermSize { rows: 24, cols: 80 };
+
+    let request = RunRequest {
+        name,
+        cmd,
+        cwd: worktree,
+        env: Vec::new(),
+        initial_size,
+    };
+
+    let mut stream = connection::connect_with_handshake().await?;
+    let (mut reader, mut writer) = stream.split();
+
+    protocol::write_msg(&mut writer, &ClientToDaemon::Run(request)).await?;
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader).await? {
+        DaemonToClient::RunResult { id, name } => {
+            println!("started {name} ({id})");
+            Ok(())
+        }
+        DaemonToClient::Error { code, message } => {
+            bail!("daemon refused: {code:?} {message}")
+        }
+        other => bail!("unexpected response: {other:?}"),
+    }
+}
+
+fn validate_name(name: &str) -> Result<()> {
+    let len = name.chars().count();
+    if !(1..=64).contains(&len) {
+        return Err(anyhow!("name must be 1-64 characters"));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(anyhow!(
+            "name may only contain a-z, A-Z, 0-9, '.', '_', '-'"
+        ));
+    }
+    Ok(())
+}
