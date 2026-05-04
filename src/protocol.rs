@@ -3,14 +3,14 @@
 //! Frames are length-prefixed `postcard` payloads over a Unix socket.
 //! See `docs/protocol.md` for the full specification.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Hard cap on a single frame's payload size, to keep a malformed length
 /// prefix from triggering an arbitrarily large allocation.
@@ -60,30 +60,59 @@ pub enum ErrorCode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientToDaemon {
-    Hello { protocol_version: u32 },
+    Hello {
+        protocol_version: u32,
+    },
     Run(RunRequest),
     Ls,
-    Attach { name: String, initial_size: TermSize },
+    Attach {
+        name: String,
+        initial_size: TermSize,
+    },
     Detach,
     Resize(TermSize),
     Stdin(Vec<u8>),
-    Rm { name: String, force: bool },
+    Rm {
+        name: String,
+        force: bool,
+    },
     Ping,
     /// Ask the daemon to terminate gracefully: stop accepting new
     /// connections, kill all live agents, remove the socket, and exit.
     Shutdown,
+    /// Ask the daemon for runtime stats (used by `pswarm doctor`).
+    Status,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DaemonToClient {
-    Hello { protocol_version: u32 },
+    Hello {
+        protocol_version: u32,
+    },
     Ok,
-    Error { code: ErrorCode, message: String },
-    RunResult { id: Uuid, name: String },
+    Error {
+        code: ErrorCode,
+        message: String,
+    },
+    RunResult {
+        id: Uuid,
+        name: String,
+    },
     AgentList(Vec<AgentSummary>),
     Stdout(Vec<u8>),
-    SessionEnded { exit_code: Option<i32> },
+    SessionEnded {
+        exit_code: Option<i32>,
+    },
     Pong,
+    /// Response to `ClientToDaemon::Status`.
+    Status {
+        /// Daemon process uptime in seconds.
+        uptime_seconds: u64,
+        /// Number of agents currently in the registry.
+        agent_count: u32,
+        /// Daemon binary version (CARGO_PKG_VERSION at build time).
+        version: String,
+    },
 }
 
 /// Read one length-prefixed `postcard`-encoded message from `reader`.

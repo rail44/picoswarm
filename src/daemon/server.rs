@@ -10,12 +10,12 @@ use anyhow::{Context, Result};
 use portable_pty::PtySize;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{
-    unix::{ReadHalf, WriteHalf},
     UnixListener, UnixStream,
+    unix::{ReadHalf, WriteHalf},
 };
 use tokio::sync::Notify;
 use tracing::{debug, info, warn};
@@ -24,7 +24,7 @@ use crate::daemon::output_session::{SessionEvent, SubscribeReply};
 use crate::daemon::registry::{AgentEntry, Registry};
 use crate::daemon::session;
 use crate::protocol::{
-    self, ClientToDaemon, DaemonToClient, ErrorCode, RunRequest, TermSize, PROTOCOL_VERSION,
+    self, ClientToDaemon, DaemonToClient, ErrorCode, PROTOCOL_VERSION, RunRequest, TermSize,
 };
 
 pub async fn run(socket_path: PathBuf) -> Result<()> {
@@ -54,6 +54,7 @@ pub async fn run(socket_path: PathBuf) -> Result<()> {
 
     let registry = Registry::new();
     let shutdown = Arc::new(Notify::new());
+    let started_at = std::time::Instant::now();
 
     loop {
         tokio::select! {
@@ -66,7 +67,7 @@ pub async fn run(socket_path: PathBuf) -> Result<()> {
                 let (stream, _) = accept_result?;
                 let reg = registry.clone();
                 let sd = Arc::clone(&shutdown);
-                tokio::spawn(handle_connection(stream, reg, sd));
+                tokio::spawn(handle_connection(stream, reg, sd, started_at));
             }
         }
     }
@@ -93,8 +94,9 @@ async fn handle_connection(
     mut stream: UnixStream,
     registry: Registry,
     shutdown: Arc<Notify>,
+    started_at: std::time::Instant,
 ) {
-    if let Err(e) = handle_connection_inner(&mut stream, registry, shutdown).await {
+    if let Err(e) = handle_connection_inner(&mut stream, registry, shutdown, started_at).await {
         warn!("connection ended: {e:#}");
     }
 }
@@ -103,6 +105,7 @@ async fn handle_connection_inner(
     stream: &mut UnixStream,
     registry: Registry,
     shutdown: Arc<Notify>,
+    started_at: std::time::Instant,
 ) -> Result<()> {
     let (mut reader, mut writer) = stream.split();
 
@@ -157,14 +160,18 @@ async fn handle_connection_inner(
             shutdown.notify_one();
         }
         other => {
-            let response = handle_oneshot(other, &registry).await;
+            let response = handle_oneshot(other, &registry, started_at).await;
             protocol::write_msg(&mut writer, &response).await?;
         }
     }
     Ok(())
 }
 
-async fn handle_oneshot(msg: ClientToDaemon, registry: &Registry) -> DaemonToClient {
+async fn handle_oneshot(
+    msg: ClientToDaemon,
+    registry: &Registry,
+    started_at: std::time::Instant,
+) -> DaemonToClient {
     match msg {
         ClientToDaemon::Ping => DaemonToClient::Pong,
 
@@ -178,6 +185,12 @@ async fn handle_oneshot(msg: ClientToDaemon, registry: &Registry) -> DaemonToCli
                 code: ErrorCode::NotFound,
                 message: format!("no agent named {name}"),
             },
+        },
+
+        ClientToDaemon::Status => DaemonToClient::Status {
+            uptime_seconds: started_at.elapsed().as_secs(),
+            agent_count: registry.list().len() as u32,
+            version: env!("CARGO_PKG_VERSION").to_string(),
         },
 
         ClientToDaemon::Hello { .. } => DaemonToClient::Error {

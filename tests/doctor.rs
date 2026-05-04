@@ -3,9 +3,7 @@
 mod common;
 
 use common::TestDaemon;
-use picoswarm::protocol::{
-    self, ClientToDaemon, DaemonToClient, ErrorCode, PROTOCOL_VERSION,
-};
+use picoswarm::protocol::{self, ClientToDaemon, DaemonToClient, ErrorCode, PROTOCOL_VERSION};
 
 #[tokio::test]
 async fn ping_pong() {
@@ -23,6 +21,39 @@ async fn ping_pong() {
     {
         DaemonToClient::Pong => {}
         other => panic!("expected Pong, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn status_returns_uptime_agent_count_and_version() {
+    let daemon = TestDaemon::start();
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+
+    protocol::write_msg(&mut writer, &ClientToDaemon::Status)
+        .await
+        .expect("write Status");
+
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read Status response")
+    {
+        DaemonToClient::Status {
+            uptime_seconds,
+            agent_count,
+            version,
+        } => {
+            assert!(
+                uptime_seconds < 60,
+                "freshly-started daemon uptime should be tiny, got {uptime_seconds}s"
+            );
+            assert_eq!(agent_count, 0, "no agents have been spawned");
+            assert!(
+                !version.is_empty(),
+                "daemon should report a non-empty version"
+            );
+        }
+        other => panic!("expected Status, got {other:?}"),
     }
 }
 
