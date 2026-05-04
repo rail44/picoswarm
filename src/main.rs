@@ -1,15 +1,10 @@
 use clap::Parser;
-
-mod cli;
-mod client;
-mod daemon;
-mod paths;
-mod protocol;
+use picoswarm::{cli, client, daemon};
 
 fn main() -> anyhow::Result<()> {
-    let cli = cli::Cli::parse();
+    let parsed = cli::Cli::parse();
 
-    match cli.command {
+    match parsed.command {
         cli::Command::Daemon => daemon::run(),
         cli::Command::Doctor => {
             init_client_tracing();
