@@ -67,11 +67,11 @@ These need to be settled before or during MVP implementation. Listed in the orde
 
 ### Known limitations
 
-- **Detach key does not work when the agent has enabled an extended keyboard protocol** (kitty keyboard protocol, CSI-u, etc.). In that mode the local terminal encodes `Ctrl-\` as an escape sequence (e.g. `\e[28;5u`) instead of byte `0x1c`, and the client only watches for the raw byte. Claude Code in particular triggers this. Workaround for now: run the agent with whatever flag disables that mode, or kill the agent and start a fresh attach. Future fix candidate: switch to a prefix-then-key detach (e.g. `Ctrl-Q Q`) that survives keyboard-protocol re-encoding.
+- **Detach trigger split across stdin reads is not recognised.** The matcher only looks at one read at a time; if `Ctrl-Q` lands at the end of one read and `q` at the start of the next (e.g. extreme typing speed plus packet fragmentation over SSH), detach silently fails. In practice the kernel batches both keys into a single read. If this becomes a real problem, add cross-read state.
 
 ### Resolved (captured here for visibility)
 
-- Detach key: `Ctrl-\` (byte `0x1c`). Matches abduco; avoids tmux/ssh collisions. Subject to the limitation noted above.
+- Detach trigger: **`Ctrl-Q` then `q`** (or `Q`). Both keys are recognised in either raw byte form or the CSI-u keyboard-protocol form, so detach works whether or not the agent (e.g. Claude Code) has enabled an extended keyboard protocol. The previous single-key `Ctrl-\` was abandoned because it broke under those protocols.
 - Ring buffer size: 64 KB per session, in-memory only.
 - Encoding: `postcard` (replaced `bincode`, which is unmaintained per RUSTSEC-2025-0141).
 - Registry persistence: **none for MVP**. The daemon holds the agent map in memory; when the daemon dies its child processes die too, so there is nothing meaningful to persist. Add a JSON-on-disk store (or similar) if a future use case justifies it.
