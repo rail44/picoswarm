@@ -3,11 +3,18 @@
 //! Frames are length-prefixed `postcard` payloads over a Unix socket.
 //! See `docs/protocol.md` for the full specification.
 
+use anyhow::{anyhow, Result};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Hard cap on a single frame's payload size, to keep a malformed length
+/// prefix from triggering an arbitrarily large allocation.
+const MAX_FRAME_LEN: u32 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct TermSize {
@@ -74,4 +81,40 @@ pub enum DaemonToClient {
     Stdout(Vec<u8>),
     SessionEnded { exit_code: Option<i32> },
     Pong,
+}
+
+/// Read one length-prefixed `postcard`-encoded message from `reader`.
+pub async fn read_msg<T, R>(reader: &mut R) -> Result<T>
+where
+    T: DeserializeOwned,
+    R: AsyncReadExt + Unpin,
+{
+    let mut len_buf = [0u8; 4];
+    reader.read_exact(&mut len_buf).await?;
+    let len = u32::from_le_bytes(len_buf);
+    if len > MAX_FRAME_LEN {
+        return Err(anyhow!(
+            "frame size {len} exceeds the {MAX_FRAME_LEN}-byte limit"
+        ));
+    }
+    let mut buf = vec![0u8; len as usize];
+    reader.read_exact(&mut buf).await?;
+    Ok(postcard::from_bytes(&buf)?)
+}
+
+/// Write one length-prefixed `postcard`-encoded message to `writer`.
+pub async fn write_msg<T, W>(writer: &mut W, msg: &T) -> Result<()>
+where
+    T: Serialize,
+    W: AsyncWriteExt + Unpin,
+{
+    let bytes = postcard::to_allocvec(msg)?;
+    let len: u32 = bytes
+        .len()
+        .try_into()
+        .map_err(|_| anyhow!("encoded message exceeds u32 length prefix"))?;
+    writer.write_all(&len.to_le_bytes()).await?;
+    writer.write_all(&bytes).await?;
+    writer.flush().await?;
+    Ok(())
 }
