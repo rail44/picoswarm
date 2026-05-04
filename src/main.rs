@@ -1,6 +1,9 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+#[allow(dead_code)]
+mod protocol;
+
 #[derive(Parser)]
 #[command(
     name = "pswarm",

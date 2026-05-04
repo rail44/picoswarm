@@ -38,7 +38,7 @@ picoswarm is a single binary that operates in two roles:
 Components:
 
 - **daemon**: Holds PTYs via `portable-pty`. Multiplexes I/O between PTYs and connected clients. Maintains per-session output ring buffers so a reattaching client can see recent output.
-- **registry**: A single SQLite file. Source of truth for agent metadata (name, worktree, tags, parent, etc.). Encapsulated by a `Registry` struct; no SQL is written directly from core logic.
+- **registry**: The daemon's in-memory map from agent id/name to session metadata (name, worktree, status, etc.). Encapsulated by a `Registry` struct. Not persisted to disk: when the daemon dies, its agent processes die with it, so the registry has nothing meaningful to outlive. Persistence may be added later if a use case appears that justifies it.
 - **adapter (PaneHost)**: Abstraction over the user's terminal/multiplexer for opening, focusing, and closing the windows that host attached clients. Implemented as the `PaneHost` trait, fully decoupled from core. First-class adapter: kitty.
 - **single-binary CLI**: An agent (Claude Code itself) must be able to operate its own orchestrator via the `pswarm` command. Do not implement this as a fish/bash function (subshells cannot invoke it).
 
@@ -48,7 +48,7 @@ Components:
 - `portable-pty` for PTY operations
 - `tokio` for async I/O in the daemon
 - `serde` + `postcard` for the client-daemon protocol
-- `rusqlite` (bundled) for the registry
+- (no separate registry crate — the daemon keeps agent metadata in memory)
 - `clap` (derive) for the CLI
 - `directories` for XDG paths
 - `thiserror` / `anyhow` / `tracing` for errors and logging
@@ -90,7 +90,7 @@ If you are about to propose something that violates one of these — for "simpli
 
 - **agent**: A single instance of a CLI coding agent (Claude Code, OpenCode, Codex CLI, etc.).
 - **session**: A PTY held by the picoswarm daemon, hosting exactly one agent process.
-- **registry**: The SQLite database holding agent metadata and the agent ↔ session mapping.
+- **registry**: The daemon's in-memory store of agent metadata and the agent ↔ session mapping. Not persisted to disk in MVP.
 - **daemon**: The long-lived `pswarm daemon` process that owns all PTYs and serves clients over a Unix socket.
 - **client**: A short-lived `pswarm <subcommand>` invocation that talks to the daemon.
 - **adapter (PaneHost)**: Abstraction over an external tool (kitty, wezterm, etc.) that opens, focuses, and closes the windows hosting attached clients.

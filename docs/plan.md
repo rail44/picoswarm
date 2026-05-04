@@ -62,26 +62,48 @@ Triggered by gaps that show up in real use, not by this list. Likely candidates,
 
 These need to be settled before or during MVP implementation. Listed in the order that they likely matter.
 
-1. ~~**Client-daemon protocol shape.**~~ **Resolved**, see `docs/protocol.md`. Length-prefixed `postcard` envelopes over a Unix socket; message variants align with CLI verbs.
-2. **Daemon lifecycle.** Auto-start strategy on first client invocation (sketched in `docs/protocol.md`), single-instance guarantee via socket bind, graceful shutdown, what happens to live sessions if the daemon crashes (they die; reconcile registry on next start). The auto-start mechanism (how the client forks the daemon process and waits for the socket) still needs to be pinned down.
-3. **PTY size and resize.** How a client communicates its terminal size to the daemon, how resizes propagate to the PTY, what happens when no client is attached. (Defaults captured in `docs/protocol.md`; need to confirm behavior when the connected client is the only sizing authority and disconnects — keep last size, or reset to 80x24?)
-4. **Repository layout.** Concrete `src/` module split (daemon vs. client vs. shared). Likely:
-   - `src/main.rs` (dispatch)
-   - `src/cli.rs` (clap)
-   - `src/daemon/` (server, session, lifecycle)
-   - `src/client/` (attach loop)
-   - `src/protocol.rs` (shared)
-   - `src/registry.rs`
-   - `src/adapter/` (kitty)
-   - `src/paths.rs`, `src/error.rs`
-5. **SQLite schema.** Minimum: `agents(id, name, worktree, cmd, created_at, updated_at, status)`. `parent_id` and `tags` deferred.
-6. **Config file.** TOML at `$XDG_CONFIG_HOME/picoswarm/config.toml`. May not be needed for MVP at all — defaults plus CLI flags may be enough.
+1. **PTY size and resize when no client is attached.** Defaults are captured in `docs/protocol.md` (initial 80x24, client reports its size on attach). Still open: when the only attached client disconnects, does the daemon keep the last reported size on the PTY, or reset to 80x24? Working assumption: keep last size; revisit if a use case shows it matters.
+2. **Config file.** TOML at `$XDG_CONFIG_HOME/picoswarm/config.toml`. Likely not needed for MVP — defaults plus CLI flags should be enough. Add only when a setting needs to persist between invocations.
 
 ### Resolved (captured here for visibility)
 
 - Detach key: `Ctrl-\` (byte `0x1c`). Matches abduco; avoids tmux/ssh collisions.
 - Ring buffer size: 64 KB per session, in-memory only.
 - Encoding: `postcard` (replaced `bincode`, which is unmaintained per RUSTSEC-2025-0141).
+- Registry persistence: **none for MVP**. The daemon holds the agent map in memory; when the daemon dies its child processes die too, so there is nothing meaningful to persist. Add a JSON-on-disk store (or similar) if a future use case justifies it.
+- Client-daemon protocol shape: see `docs/protocol.md`. Length-prefixed `postcard` envelopes over a Unix socket; message variants align with CLI verbs.
+- Daemonization: use the `daemonize` crate (handles fork / setsid / stdio redirect). The fork happens before the tokio runtime starts.
+- PTY env policy: inherit the daemon's full env, plus inject `PSWARM_DAEMON=1`. Per-agent variables (`PSWARM_AGENT_ID`, `PSWARM_AGENT_NAME`, ...) are added later when agent self-invocation lands.
+- Daemon log path: `$XDG_STATE_HOME/picoswarm/daemon.log` (fallback `$HOME/.local/state/picoswarm/daemon.log`). Append-only for MVP; rotation is out of scope.
+- Agent name validation: must match `^[a-zA-Z0-9._-]{1,64}$`. Enforced at the CLI layer before the request hits the daemon.
+- Repository layout: see "Repository layout" below.
+
+### Repository layout
+
+```
+src/
+├── main.rs            # dispatch (parse CLI, route to client or daemon code path)
+├── cli.rs             # clap definitions
+├── protocol.rs        # shared wire types
+├── error.rs           # crate-wide error types
+├── paths.rs           # XDG path helpers (socket, log, config)
+├── daemon/
+│   ├── mod.rs         # entrypoint for `pswarm daemon`
+│   ├── lifecycle.rs   # daemonize + tokio runtime startup
+│   ├── server.rs      # Unix socket accept loop + per-client task
+│   ├── session.rs     # per-PTY state, ring buffer, fan-out to attached client
+│   └── registry.rs    # in-memory agent map (lives inside the daemon)
+├── client/
+│   ├── mod.rs         # entrypoint for client subcommands
+│   └── attach.rs      # raw-mode + bidirectional streaming loop
+└── adapter/
+    ├── mod.rs         # PaneHost trait + auto-detect
+    └── kitty.rs       # kitty remote control implementation
+```
+
+Notes:
+- `registry.rs` lives inside `daemon/` because the registry is in-memory and dies with the daemon. Wire types stay in the shared `protocol.rs`; the daemon converts between its internal representation and `AgentSummary` at the protocol boundary.
+- `cli.rs` will receive the clap definitions currently inlined in `main.rs` once `main.rs` starts dispatching to module entry points.
 
 ---
 
@@ -91,9 +113,9 @@ In order:
 
 1. ~~Initialize the Cargo project~~ **Done**.
 2. ~~Decide the client-daemon protocol shape and capture it in `docs/protocol.md`.~~ **Done**.
-3. Settle the remaining open design decisions (daemon lifecycle details, PTY size handling, repo layout, SQLite schema). These are best decided in the order daemon-shape → repo-layout → schema.
+3. ~~Settle the remaining open design decisions.~~ **Done** (registry persistence, daemonization, env policy, log path, name validation, repo layout — see "Resolved" above). The only thing still open is the no-client PTY size policy, which can be decided when the resize path is wired.
 4. Implement the daemon: socket listener, session table, PTY spawn via `portable-pty`, ring buffer, basic message loop.
 5. Implement the client `attach` loop: connect to the daemon, forward stdin/stdout, handle the detach key (`Ctrl-\`).
-6. Implement `pswarm run`, `pswarm ls`, `pswarm rm`, `pswarm doctor`. Wire the registry (rusqlite).
+6. Implement `pswarm run`, `pswarm ls`, `pswarm rm`, `pswarm doctor`. The daemon holds the registry in memory.
 7. Wire the kitty adapter: on `pswarm run`, open a new kitty tab and run `pswarm attach <name>` in it.
 8. Live-use the MVP. Capture friction in this file, decide what (if anything) graduates from "Next" into the next iteration.
