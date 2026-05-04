@@ -65,13 +65,10 @@ These need to be settled before or during MVP implementation. Listed in the orde
 1. **PTY size and resize when no client is attached.** Defaults are captured in `docs/protocol.md` (initial 80x24, client reports its size on attach). Still open: when the only attached client disconnects, does the daemon keep the last reported size on the PTY, or reset to 80x24? Working assumption: keep last size; revisit if a use case shows it matters.
 2. **Config file.** TOML at `$XDG_CONFIG_HOME/picoswarm/config.toml`. Likely not needed for MVP — defaults plus CLI flags should be enough. Add only when a setting needs to persist between invocations.
 
-### Known limitations
-
-- **Detach trigger split across stdin reads is not recognised.** The matcher only looks at one read at a time; if `Ctrl-Q` lands at the end of one read and `q` at the start of the next (e.g. extreme typing speed plus packet fragmentation over SSH), detach silently fails. In practice the kernel batches both keys into a single read. If this becomes a real problem, add cross-read state.
-
 ### Resolved (captured here for visibility)
 
-- Detach trigger: **`Ctrl-Q` then `q`** (or `Q`). Both keys are recognised in either raw byte form or the CSI-u keyboard-protocol form, so detach works whether or not the agent (e.g. Claude Code) has enabled an extended keyboard protocol. The previous single-key `Ctrl-\` was abandoned because it broke under those protocols.
+- Detach trigger: **`Ctrl-Q` then `q`** (or `Q`). Both keys are recognised in either raw byte form or the CSI-u keyboard-protocol form, so detach works whether or not the agent (e.g. Claude Code) has enabled an extended keyboard protocol. The matcher carries state across stdin reads, so the two keys do not have to land in the same `read()`. The previous single-key `Ctrl-\` was abandoned because it broke under those protocols.
+- Stdin debugging: setting `PSWARM_DEBUG_STDIN=/path/to/file` makes the attach client append every raw stdin chunk it sees (as space-separated hex bytes) to that file. Use this to find out what bytes a particular keypress actually produces in the user's terminal when detach is misbehaving.
 - Ring buffer size: 64 KB per session, in-memory only.
 - Encoding: `postcard` (replaced `bincode`, which is unmaintained per RUSTSEC-2025-0141).
 - Registry persistence: **none for MVP**. The daemon holds the agent map in memory; when the daemon dies its child processes die too, so there is nothing meaningful to persist. Add a JSON-on-disk store (or similar) if a future use case justifies it.

@@ -4,12 +4,16 @@
 //! the daemon as `Stdin`, prints every `Stdout` chunk back to the
 //! terminal, and watches `SIGWINCH` to keep the agent's PTY size in sync.
 //!
-//! Detach trigger: press **`Ctrl-Q`** then **`q`** (or `Q`). The pair
-//! must arrive in a single stdin read; in practice that is what the
-//! kernel delivers when both keys are pressed quickly. Both keys are
-//! recognised in either raw byte form or the CSI-u keyboard-protocol
+//! Detach trigger: press **`Ctrl-Q`** then **`q`** (or `Q`). Both keys
+//! are recognised in either raw byte form or the CSI-u keyboard-protocol
 //! form, so detach works whether or not the agent has enabled an
-//! extended keyboard protocol.
+//! extended keyboard protocol. The matcher carries state across stdin
+//! reads, so the two keys do not have to land in the same `read()`.
+//!
+//! Diagnostic: setting `PSWARM_DEBUG_STDIN=/path/to/file` makes the
+//! attach client append every raw stdin chunk it sees (in `{:02x}` form)
+//! to that file. Useful for figuring out what bytes the user's terminal
+//! is actually sending for a given keypress.
 
 use anyhow::{anyhow, bail, Result};
 use crossterm::terminal;
@@ -140,31 +144,75 @@ fn stdin_loop(tx: mpsc::UnboundedSender<ClientToDaemon>) {
     let stdin = std::io::stdin();
     let mut handle = stdin.lock();
     let mut buf = [0u8; 4096];
+    let mut leftover: Vec<u8> = Vec::new();
+    let mut debug_log = open_debug_log();
+
     loop {
         let n = match handle.read(&mut buf) {
             Ok(0) => return,
             Ok(n) => n,
             Err(_) => return,
         };
-        let chunk = &buf[..n];
-        if let Some((start, len)) = find_detach_trigger(chunk) {
+
+        if let Some(file) = debug_log.as_mut() {
+            let _ = log_chunk(file, &buf[..n]);
+        }
+
+        // Combine any leftover bytes from a previous read (held because
+        // they could be the start of a partial detach-trigger encoding)
+        // with the new chunk.
+        let mut combined: Vec<u8> = std::mem::take(&mut leftover);
+        combined.extend_from_slice(&buf[..n]);
+
+        if let Some((start, _len)) = find_detach_trigger(&combined) {
             if start > 0
                 && tx
-                    .send(ClientToDaemon::Stdin(chunk[..start].to_vec()))
+                    .send(ClientToDaemon::Stdin(combined[..start].to_vec()))
                     .is_err()
             {
                 return;
             }
             let _ = tx.send(ClientToDaemon::Detach);
-            // Anything in the chunk after the trigger is dropped on the
-            // floor; the user has asked to leave the session.
-            let _ = len;
             return;
         }
-        if tx.send(ClientToDaemon::Stdin(chunk.to_vec())).is_err() {
+
+        // No full trigger yet. If `combined` ends with the prefix of one
+        // of the encodings we recognise, hold those tail bytes back so
+        // the next read can complete the match.
+        let split = partial_prefix_at_end(&combined);
+        if split > 0
+            && tx
+                .send(ClientToDaemon::Stdin(combined[..split].to_vec()))
+                .is_err()
+        {
             return;
+        }
+        if split < combined.len() {
+            leftover.extend_from_slice(&combined[split..]);
         }
     }
+}
+
+fn open_debug_log() -> Option<std::fs::File> {
+    let path = std::env::var_os("PSWARM_DEBUG_STDIN")?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()
+}
+
+fn log_chunk(file: &mut std::fs::File, chunk: &[u8]) -> std::io::Result<()> {
+    use std::fmt::Write as _;
+    let mut line = String::with_capacity(chunk.len() * 3 + 1);
+    for (i, b) in chunk.iter().enumerate() {
+        if i > 0 {
+            line.push(' ');
+        }
+        let _ = write!(line, "{:02x}", b);
+    }
+    line.push('\n');
+    file.write_all(line.as_bytes())
 }
 
 /// Look for a `Ctrl-Q` followed by `q`/`Q` anywhere in `bytes`. Each key
@@ -215,6 +263,35 @@ fn q_len(bytes: &[u8]) -> Option<usize> {
             }
         }
     }
+}
+
+/// Returns the index at which to split `bytes`. The caller should emit
+/// `bytes[..idx]` as `Stdin` and hold `bytes[idx..]` for the next read,
+/// because that suffix could be the beginning of a longer detach-trigger
+/// encoding that has not finished arriving yet.
+fn partial_prefix_at_end(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+
+    // Raw Ctrl-Q is a single byte; if it is the last byte we have to wait
+    // to see whether `q` follows.
+    if bytes.last() == Some(&0x11) {
+        return bytes.len() - 1;
+    }
+
+    // CSI-u Ctrl-Q is "\x1b[113;5u". If `bytes` ends with any non-empty
+    // proper prefix of that sequence (or the sequence in full, awaiting
+    // the trailing `q`), hold it back.
+    let csi_u = b"\x1b[113;5u";
+    let max = csi_u.len().min(bytes.len());
+    for k in (1..=max).rev() {
+        if &bytes[bytes.len() - k..] == &csi_u[..k] {
+            return bytes.len() - k;
+        }
+    }
+
+    bytes.len()
 }
 
 #[cfg(test)]
@@ -271,6 +348,39 @@ mod tests {
     fn ctrl_q_followed_by_other_key() {
         // Ctrl-Q then 'a' should not trigger.
         assert_eq!(find_detach_trigger(b"\x11a"), None);
+    }
+
+    #[test]
+    fn partial_prefix_holds_raw_ctrl_q() {
+        assert_eq!(partial_prefix_at_end(b"hello\x11"), 5);
+    }
+
+    #[test]
+    fn partial_prefix_holds_partial_csi_u() {
+        // \x1b[113;5u is 8 bytes; every non-empty prefix should be held.
+        assert_eq!(partial_prefix_at_end(b"hello\x1b"), 5);
+        assert_eq!(partial_prefix_at_end(b"hello\x1b["), 5);
+        assert_eq!(partial_prefix_at_end(b"hello\x1b[1"), 5);
+        assert_eq!(partial_prefix_at_end(b"hello\x1b[113;5"), 5);
+        assert_eq!(partial_prefix_at_end(b"hello\x1b[113;5u"), 5);
+    }
+
+    #[test]
+    fn partial_prefix_does_not_hold_unrelated_escape() {
+        // Arrow up (\x1b[A) is not a prefix of Ctrl-Q's CSI-u encoding.
+        assert_eq!(partial_prefix_at_end(b"hello\x1b[A"), 8);
+    }
+
+    #[test]
+    fn partial_prefix_does_not_hold_resolved_ctrl_q() {
+        // \x11 followed by 'a' is fully resolved (not detach, but also
+        // not a partial prefix).
+        assert_eq!(partial_prefix_at_end(b"hello\x11a"), 7);
+    }
+
+    #[test]
+    fn partial_prefix_empty() {
+        assert_eq!(partial_prefix_at_end(b""), 0);
     }
 }
 
