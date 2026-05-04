@@ -6,15 +6,18 @@
 // dead_code in the others — silence that.
 #![allow(dead_code)]
 
+pub mod pty;
+
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 use tokio::net::UnixStream;
+use uuid::Uuid;
 
 use picoswarm::protocol::{
-    self, ClientToDaemon, DaemonToClient, PROTOCOL_VERSION,
+    self, ClientToDaemon, DaemonToClient, RunRequest, TermSize, PROTOCOL_VERSION,
 };
 
 /// A daemon instance scoped to one test, with its own runtime/state dirs
@@ -92,6 +95,29 @@ impl Drop for TestDaemon {
     fn drop(&mut self) {
         let _ = self.daemon.kill();
         let _ = self.daemon.wait();
+    }
+}
+
+/// Spawn an agent named `name` with the given argv. Returns its UUID.
+pub async fn spawn_agent(daemon: &TestDaemon, name: &str, cmd: Vec<String>) -> Uuid {
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    let req = RunRequest {
+        name: name.to_string(),
+        cmd,
+        cwd: None,
+        env: Vec::new(),
+        initial_size: TermSize { rows: 24, cols: 80 },
+    };
+    protocol::write_msg(&mut writer, &ClientToDaemon::Run(req))
+        .await
+        .expect("write Run");
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read RunResult")
+    {
+        DaemonToClient::RunResult { id, .. } => id,
+        other => panic!("expected RunResult, got {other:?}"),
     }
 }
 
