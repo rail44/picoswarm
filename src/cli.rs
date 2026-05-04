@@ -15,12 +15,19 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Command {
     /// Run a new agent under the picoswarm daemon.
+    ///
+    /// By default, attaches to the new agent in the current terminal
+    /// (mirroring `docker run`). Use `-d` / `--detach` to spawn without
+    /// attaching.
     Run {
         /// Human-friendly name for the agent.
         name: String,
         /// Working directory the agent should start in (e.g. a git worktree).
         #[arg(long)]
         worktree: Option<PathBuf>,
+        /// Spawn the agent and return immediately instead of attaching.
+        #[arg(long, short)]
+        detach: bool,
         /// Command and arguments to run. Defaults to `claude`. Use `--` to separate from pswarm flags.
         #[arg(last = true)]
         cmd: Vec<String>,

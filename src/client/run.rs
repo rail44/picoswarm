@@ -1,23 +1,30 @@
-//! `pswarm run`: ask the daemon to spawn a new agent.
+//! `pswarm run`: ask the daemon to spawn a new agent, then attach to it
+//! by default (or just print the assigned id when `--detach` is set).
 
 use anyhow::{anyhow, bail, Result};
 use std::path::PathBuf;
 
-use crate::client::connection;
+use crate::client::{attach, connection};
 use crate::protocol::{
     self, ClientToDaemon, DaemonToClient, RunRequest, TermSize,
 };
 
-pub async fn run(name: String, worktree: Option<PathBuf>, cmd: Vec<String>) -> Result<()> {
+pub async fn run(
+    name: String,
+    worktree: Option<PathBuf>,
+    detach: bool,
+    cmd: Vec<String>,
+) -> Result<()> {
     validate_name(&name)?;
 
-    // The agent is spawned independently of this client process, so the
-    // local terminal size is irrelevant. Use a sensible default; the
-    // attaching client will resize the PTY when it connects.
+    // The agent is spawned independently of this client process. Use a
+    // sensible default; the attaching client (whether this process when
+    // detach=false, or a later `pswarm attach`) will resize the PTY when
+    // it connects.
     let initial_size = TermSize { rows: 24, cols: 80 };
 
     let request = RunRequest {
-        name,
+        name: name.clone(),
         cmd,
         cwd: worktree,
         env: Vec::new(),
@@ -25,18 +32,27 @@ pub async fn run(name: String, worktree: Option<PathBuf>, cmd: Vec<String>) -> R
     };
 
     let mut stream = connection::connect_with_handshake().await?;
-    let (mut reader, mut writer) = stream.split();
+    let assigned = {
+        let (mut reader, mut writer) = stream.split();
+        protocol::write_msg(&mut writer, &ClientToDaemon::Run(request)).await?;
+        match protocol::read_msg::<DaemonToClient, _>(&mut reader).await? {
+            DaemonToClient::RunResult { id, name } => (id, name),
+            DaemonToClient::Error { code, message } => {
+                bail!("daemon refused: {code:?} {message}")
+            }
+            other => bail!("unexpected response: {other:?}"),
+        }
+    };
+    drop(stream);
 
-    protocol::write_msg(&mut writer, &ClientToDaemon::Run(request)).await?;
-    match protocol::read_msg::<DaemonToClient, _>(&mut reader).await? {
-        DaemonToClient::RunResult { id, name } => {
-            println!("started {name} ({id})");
-            Ok(())
-        }
-        DaemonToClient::Error { code, message } => {
-            bail!("daemon refused: {code:?} {message}")
-        }
-        other => bail!("unexpected response: {other:?}"),
+    let (id, returned_name) = assigned;
+
+    if detach {
+        println!("started {returned_name} ({id})");
+        Ok(())
+    } else {
+        // Default: attach to the freshly-spawned agent.
+        attach::run(returned_name).await
     }
 }
 

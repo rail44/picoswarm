@@ -18,10 +18,11 @@ fn main() -> anyhow::Result<()> {
         cli::Command::Run {
             name,
             worktree,
+            detach,
             cmd,
         } => {
             init_client_tracing();
-            client_runtime().block_on(client::run::run(name, worktree, cmd))
+            client_runtime().block_on(client::run::run(name, worktree, detach, cmd))
         }
         cli::Command::Ls { json } => {
             init_client_tracing();
