@@ -31,9 +31,9 @@ fn main() -> anyhow::Result<()> {
             init_client_tracing();
             client_runtime().block_on(client::rm::run(name, force))
         }
-        cli::Command::Attach { .. } => {
+        cli::Command::Attach { name } => {
             init_client_tracing();
-            anyhow::bail!("attach is not implemented yet")
+            client_runtime().block_on(client::attach::run(name))
         }
     }
 }

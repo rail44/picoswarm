@@ -1,19 +1,32 @@
 //! Unix socket accept loop and per-connection handler.
+//!
+//! Most subcommands are handled in a one-shot request/response style; the
+//! connection closes after the response. `Attach` is special — once the
+//! daemon has acknowledged the attach, the same connection switches into
+//! a bidirectional streaming session until either side disconnects or
+//! sends `Detach`.
 
 use anyhow::{Context, Result};
+use portable_pty::PtySize;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use tokio::net::{UnixListener, UnixStream};
-use tracing::{info, warn};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
+use tokio::net::{
+    unix::{ReadHalf, WriteHalf},
+    UnixListener, UnixStream,
+};
+use tracing::{debug, info, warn};
 
-use crate::daemon::registry::Registry;
+use crate::daemon::output_session::{SessionEvent, SubscribeReply};
+use crate::daemon::registry::{AgentEntry, Registry};
 use crate::daemon::session;
 use crate::protocol::{
-    self, ClientToDaemon, DaemonToClient, ErrorCode, RunRequest, PROTOCOL_VERSION,
+    self, ClientToDaemon, DaemonToClient, ErrorCode, RunRequest, TermSize, PROTOCOL_VERSION,
 };
 
 pub async fn run(socket_path: PathBuf) -> Result<()> {
-    // Single-instance check.
     if socket_path.exists() {
         match UnixStream::connect(&socket_path).await {
             Ok(_) => {
@@ -97,21 +110,26 @@ async fn handle_connection_inner(
         }
     }
 
-    // Process one request and respond, then close. Streaming attach lives
-    // in a future commit.
     let msg: ClientToDaemon = protocol::read_msg(&mut reader).await?;
-    let response = handle_message(msg, &registry).await;
-    protocol::write_msg(&mut writer, &response).await?;
+    match msg {
+        ClientToDaemon::Attach { name, initial_size } => {
+            handle_attach(name, initial_size, &registry, &mut reader, &mut writer).await?;
+        }
+        other => {
+            let response = handle_oneshot(other, &registry).await;
+            protocol::write_msg(&mut writer, &response).await?;
+        }
+    }
     Ok(())
 }
 
-async fn handle_message(msg: ClientToDaemon, registry: &Registry) -> DaemonToClient {
+async fn handle_oneshot(msg: ClientToDaemon, registry: &Registry) -> DaemonToClient {
     match msg {
         ClientToDaemon::Ping => DaemonToClient::Pong,
 
         ClientToDaemon::Run(req) => handle_run(req, registry).await,
 
-        ClientToDaemon::Ls => DaemonToClient::AgentList(registry.refresh_and_list()),
+        ClientToDaemon::Ls => DaemonToClient::AgentList(registry.list()),
 
         ClientToDaemon::Rm { name, force } => match registry.remove(&name, force) {
             Some(_) => DaemonToClient::Ok,
@@ -126,21 +144,22 @@ async fn handle_message(msg: ClientToDaemon, registry: &Registry) -> DaemonToCli
             message: "Hello already exchanged".into(),
         },
 
-        ClientToDaemon::Attach { .. }
-        | ClientToDaemon::Detach
-        | ClientToDaemon::Resize(_)
-        | ClientToDaemon::Stdin(_) => DaemonToClient::Error {
+        ClientToDaemon::Attach { .. } => DaemonToClient::Error {
             code: ErrorCode::Internal,
-            message: "not implemented yet".into(),
+            message: "internal routing bug: Attach reached the oneshot handler".into(),
         },
+
+        ClientToDaemon::Detach | ClientToDaemon::Resize(_) | ClientToDaemon::Stdin(_) => {
+            DaemonToClient::Error {
+                code: ErrorCode::Internal,
+                message: "this message is only valid during an active attach".into(),
+            }
+        }
     }
 }
 
 async fn handle_run(req: RunRequest, registry: &Registry) -> DaemonToClient {
     let name = req.name.clone();
-
-    // Spawning is blocking work (PTY syscalls, fork). Run it on the
-    // blocking pool so we do not stall the async runtime.
     let entry_result = tokio::task::spawn_blocking(move || session::spawn_session(req)).await;
 
     let entry = match entry_result {
@@ -168,4 +187,159 @@ async fn handle_run(req: RunRequest, registry: &Registry) -> DaemonToClient {
     }
 
     DaemonToClient::RunResult { id, name }
+}
+
+/// RAII guard that clears an `attached` flag on drop, so the flag is
+/// released regardless of how the attach handler exits.
+struct AttachGuard {
+    flag: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for AttachGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Release);
+    }
+}
+
+async fn handle_attach(
+    name: String,
+    initial_size: TermSize,
+    registry: &Registry,
+    reader: &mut ReadHalf<'_>,
+    writer: &mut WriteHalf<'_>,
+) -> Result<()> {
+    let entry = match registry.lookup(&name) {
+        Some(e) => e,
+        None => {
+            protocol::write_msg(
+                writer,
+                &DaemonToClient::Error {
+                    code: ErrorCode::NotFound,
+                    message: format!("no agent named {name}"),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    if entry
+        .attached
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        protocol::write_msg(
+            writer,
+            &DaemonToClient::Error {
+                code: ErrorCode::AlreadyAttached,
+                message: format!("{name} is already attached"),
+            },
+        )
+        .await?;
+        return Ok(());
+    }
+    let _attach_guard = AttachGuard {
+        flag: Arc::clone(&entry.attached),
+    };
+
+    // Resize the PTY to the client's terminal before any output is sent.
+    apply_resize(&entry, initial_size);
+
+    protocol::write_msg(writer, &DaemonToClient::Ok).await?;
+
+    let SubscribeReply {
+        backlog,
+        mut events,
+    } = match entry.inbox.subscribe().await {
+        Some(r) => r,
+        None => {
+            protocol::write_msg(
+                writer,
+                &DaemonToClient::Error {
+                    code: ErrorCode::Internal,
+                    message: "session task is gone".into(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    if !backlog.is_empty() {
+        protocol::write_msg(writer, &DaemonToClient::Stdout(backlog)).await?;
+    }
+
+    debug!("attach streaming for {} started", name);
+
+    loop {
+        tokio::select! {
+            biased;
+
+            // Daemon -> client: live PTY output and end-of-session.
+            evt = events.recv() => match evt {
+                Some(SessionEvent::Output(bytes)) => {
+                    protocol::write_msg(writer, &DaemonToClient::Stdout(bytes)).await?;
+                }
+                Some(SessionEvent::Ended { exit_code }) => {
+                    protocol::write_msg(
+                        writer,
+                        &DaemonToClient::SessionEnded { exit_code },
+                    )
+                    .await?;
+                    break;
+                }
+                None => {
+                    debug!("session events channel closed for {}", name);
+                    break;
+                }
+            },
+
+            // Client -> daemon.
+            incoming = protocol::read_msg::<ClientToDaemon, _>(reader) => {
+                let msg = match incoming {
+                    Ok(m) => m,
+                    Err(e) => {
+                        debug!("client {} disconnected mid-attach: {}", name, e);
+                        break;
+                    }
+                };
+                match msg {
+                    ClientToDaemon::Stdin(bytes) => {
+                        let writer_handle = Arc::clone(&entry.writer);
+                        let _ = tokio::task::spawn_blocking(move || {
+                            if let Ok(mut w) = writer_handle.lock() {
+                                let _ = w.write_all(&bytes);
+                                let _ = w.flush();
+                            }
+                        }).await;
+                    }
+                    ClientToDaemon::Resize(sz) => {
+                        apply_resize(&entry, sz);
+                    }
+                    ClientToDaemon::Detach => {
+                        protocol::write_msg(writer, &DaemonToClient::Ok).await?;
+                        let _ = writer.flush().await;
+                        break;
+                    }
+                    other => {
+                        warn!("unexpected message during attach for {}: {:?}", name, other);
+                    }
+                }
+            },
+        }
+    }
+
+    debug!("attach streaming for {} ended", name);
+    Ok(())
+}
+
+fn apply_resize(entry: &AgentEntry, size: TermSize) {
+    if let Ok(master) = entry.master.lock() {
+        let _ = master.resize(PtySize {
+            rows: size.rows,
+            cols: size.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+    }
 }

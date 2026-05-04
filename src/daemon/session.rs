@@ -1,17 +1,19 @@
-//! Session spawning: open a PTY, run the requested command, and start
-//! draining its output into the per-session ring buffer.
+//! Session spawning: open a PTY, run the requested command, hand the
+//! output stream over to a per-agent session task, and assemble an
+//! `AgentEntry` that the registry can store.
 
 use anyhow::{anyhow, Context, Result};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use std::collections::VecDeque;
 use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::SystemTime;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::daemon::registry::{AgentEntry, RING_BUFFER_BYTES};
+use crate::daemon::output_session::{self, ChunkSender};
+use crate::daemon::registry::AgentEntry;
 use crate::protocol::RunRequest;
 
 pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
@@ -60,24 +62,43 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
         .spawn_command(cmd)
         .context("failed to spawn the agent process")?;
     debug!("spawned {} (pid {:?})", req.name, child.process_id());
-
-    // The slave handle is owned by the child once spawned.
     drop(pair.slave);
 
-    let ring_buffer: Arc<Mutex<VecDeque<u8>>> =
-        Arc::new(Mutex::new(VecDeque::with_capacity(RING_BUFFER_BYTES)));
-
-    // Drain the master into the ring buffer on a dedicated OS thread so
-    // the kernel PTY buffer never fills up even when no client is attached.
     let reader = pair
         .master
         .try_clone_reader()
         .context("try_clone_reader failed")?;
-    let buffer_clone = Arc::clone(&ring_buffer);
+    let writer = pair
+        .master
+        .take_writer()
+        .context("take_writer failed")?;
+
+    let master = Arc::new(Mutex::new(pair.master));
+    let child = Arc::new(Mutex::new(child));
+    let writer = Arc::new(Mutex::new(writer));
+    let attached = Arc::new(AtomicBool::new(false));
+    let dead = Arc::new(AtomicBool::new(false));
+
+    // The session task gets an `on_eof` closure that captures the child
+    // handle so it can report the exit code and flip the `dead` flag.
+    let child_for_eof = Arc::clone(&child);
+    let dead_for_eof = Arc::clone(&dead);
+    let on_eof = move || {
+        let exit = match child_for_eof.lock() {
+            Ok(mut c) => c.try_wait().ok().flatten().map(|s| s.exit_code() as i32),
+            Err(_) => None,
+        };
+        dead_for_eof.store(true, Ordering::Relaxed);
+        exit
+    };
+
+    let (chunk_tx, inbox) = output_session::spawn(on_eof);
+
+    // Drain the master into the session task on a dedicated OS thread.
     let agent_name = req.name.clone();
     thread::Builder::new()
         .name(format!("pty-reader/{}", agent_name))
-        .spawn(move || drain_into_ring(&agent_name, reader, buffer_clone))
+        .spawn(move || drain_into_session(&agent_name, reader, chunk_tx))
         .context("failed to start the PTY reader thread")?;
 
     Ok(AgentEntry {
@@ -85,18 +106,16 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
         name: req.name,
         cwd: req.cwd,
         created_at: now_unix(),
-        master: pair.master,
+        master,
         child,
-        ring_buffer,
-        dead: false,
+        writer,
+        inbox,
+        attached,
+        dead,
     })
 }
 
-fn drain_into_ring(
-    agent_name: &str,
-    mut reader: Box<dyn Read + Send>,
-    buffer: Arc<Mutex<VecDeque<u8>>>,
-) {
+fn drain_into_session(agent_name: &str, mut reader: Box<dyn Read + Send>, sink: ChunkSender) {
     let mut buf = [0u8; 8192];
     loop {
         match reader.read(&mut buf) {
@@ -105,12 +124,9 @@ fn drain_into_ring(
                 return;
             }
             Ok(n) => {
-                let Ok(mut ring) = buffer.lock() else { return };
-                for &byte in &buf[..n] {
-                    if ring.len() == RING_BUFFER_BYTES {
-                        ring.pop_front();
-                    }
-                    ring.push_back(byte);
+                if sink.send(buf[..n].to_vec()).is_err() {
+                    debug!("session task closed; PTY reader for {} exiting", agent_name);
+                    return;
                 }
             }
             Err(e) => {

@@ -3,6 +3,7 @@
 //! Holds PTYs and serves clients over a Unix socket.
 
 mod lifecycle;
+mod output_session;
 mod registry;
 mod server;
 mod session;

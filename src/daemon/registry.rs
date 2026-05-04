@@ -1,31 +1,37 @@
 //! In-memory agent registry held inside the daemon process.
 //!
-//! The registry owns every live agent's PTY master and Child handle, plus
-//! a per-agent ring buffer of recent output. There is no on-disk
-//! persistence: when the daemon dies its child processes die with it, so
-//! reviving registry rows would describe nothing real.
+//! Per-agent state is shared via `Arc<Mutex<>>` (or atomic flags) so the
+//! attach handler, the session task, and the registry's own bookkeeping
+//! can each operate without holding the global registry lock for long.
+//! Nothing is persisted to disk: when the daemon dies its child processes
+//! die with it, so reviving registry rows would describe nothing real.
 
 use anyhow::{anyhow, Result};
 use portable_pty::{Child, MasterPty};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+use crate::daemon::output_session::SessionInbox;
 use crate::protocol::{AgentStatus, AgentSummary};
 
-pub const RING_BUFFER_BYTES: usize = 64 * 1024;
-
+/// Cloneable handle to a single agent. All fields are `Arc`/`Clone` so the
+/// attach handler can hold a snapshot independently of the registry lock.
+#[derive(Clone)]
 pub struct AgentEntry {
     pub id: Uuid,
     pub name: String,
     pub cwd: Option<PathBuf>,
     pub created_at: i64,
-    pub master: Box<dyn MasterPty + Send>,
-    pub child: Box<dyn Child + Send + Sync>,
-    pub ring_buffer: Arc<Mutex<VecDeque<u8>>>,
-    /// Set once the child has been observed to have exited.
-    pub dead: bool,
+    pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    pub child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    pub inbox: SessionInbox,
+    pub attached: Arc<AtomicBool>,
+    pub dead: Arc<AtomicBool>,
 }
 
 impl AgentEntry {
@@ -33,7 +39,7 @@ impl AgentEntry {
         AgentSummary {
             id: self.id,
             name: self.name.clone(),
-            status: if self.dead {
+            status: if self.dead.load(Ordering::Relaxed) {
                 AgentStatus::Dead
             } else {
                 AgentStatus::Running
@@ -72,18 +78,31 @@ impl Registry {
         Ok(())
     }
 
-    /// Reconcile each entry's `dead` flag and return summaries.
-    pub fn refresh_and_list(&self) -> Vec<AgentSummary> {
-        let mut inner = self.inner.lock().unwrap();
-        for entry in inner.by_id.values_mut() {
-            if entry.dead {
-                continue;
+    /// Return a clone of the named agent's entry, or `None` if missing.
+    pub fn lookup(&self, name: &str) -> Option<AgentEntry> {
+        let inner = self.inner.lock().unwrap();
+        let id = inner.by_name.get(name)?;
+        inner.by_id.get(id).cloned()
+    }
+
+    /// Return summaries of every registered agent. Reads each entry's
+    /// atomic `dead` flag (kept up to date by its session task) and also
+    /// double-checks via `try_wait` in case the session task hasn't yet
+    /// observed the EOF.
+    pub fn list(&self) -> Vec<AgentSummary> {
+        let inner = self.inner.lock().unwrap();
+        let mut summaries: Vec<AgentSummary> = Vec::with_capacity(inner.by_id.len());
+        for entry in inner.by_id.values() {
+            if !entry.dead.load(Ordering::Relaxed) {
+                if let Ok(mut child) = entry.child.lock() {
+                    if let Ok(Some(_)) = child.try_wait() {
+                        entry.dead.store(true, Ordering::Relaxed);
+                    }
+                }
             }
-            if let Ok(Some(_)) = entry.child.try_wait() {
-                entry.dead = true;
-            }
+            summaries.push(entry.summary());
         }
-        inner.by_id.values().map(AgentEntry::summary).collect()
+        summaries
     }
 
     /// Remove the agent with `name`, killing the child if alive. Returns
@@ -95,8 +114,10 @@ impl Registry {
     pub fn remove(&self, name: &str, _force: bool) -> Option<AgentEntry> {
         let mut inner = self.inner.lock().unwrap();
         let id = inner.by_name.remove(name)?;
-        let mut entry = inner.by_id.remove(&id)?;
-        let _ = entry.child.kill();
+        let entry = inner.by_id.remove(&id)?;
+        if let Ok(mut child) = entry.child.lock() {
+            let _ = child.kill();
+        }
         Some(entry)
     }
 }
