@@ -67,7 +67,7 @@ These need to be settled before or during MVP implementation. Listed in the orde
 
 ### Resolved (captured here for visibility)
 
-- Detach trigger: **`Ctrl-Q` then `q`** (or `Q`). Both keys are recognised in either raw byte form or the CSI-u keyboard-protocol form, so detach works whether or not the agent (e.g. Claude Code) has enabled an extended keyboard protocol. The matcher carries state across stdin reads, so the two keys do not have to land in the same `read()`. The previous single-key `Ctrl-\` was abandoned because it broke under those protocols.
+- Detach trigger: **`Ctrl-\`** (single key). Recognised in two encoding forms — the raw C0 byte `0x1c` (no keyboard protocol), and the CSI-u sequence `\e[92;5u` (kitty kbd protocol level 1, "disambiguate escape codes"). The matcher carries state across stdin reads so the CSI-u form may straddle reads. Higher kbd-protocol levels (event types `:T`, associated text `;NN`) are not currently parsed; in real use Claude Code only enables level 1, so this works today, but if Claude graduates the matcher needs to grow. The earlier `Ctrl-Q` + `q` two-key trigger was tried (to work around the level-1 ambiguity issue we have since solved) and then dropped — single key + multi-encoding match is sufficient and ergonomically better.
 - Stdin debugging: setting `PSWARM_DEBUG_STDIN=/path/to/file` makes the attach client append every raw stdin chunk it sees (as space-separated hex bytes) to that file. Use this to find out what bytes a particular keypress actually produces in the user's terminal when detach is misbehaving.
 - Ring buffer size: 64 KB per session, in-memory only.
 - Encoding: `postcard` (replaced `bincode`, which is unmaintained per RUSTSEC-2025-0141).

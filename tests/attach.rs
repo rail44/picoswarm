@@ -14,7 +14,7 @@ fn settle() {
 }
 
 #[tokio::test]
-async fn attach_detaches_on_raw_ctrl_q_q() {
+async fn attach_detaches_on_raw_ctrl_backslash() {
     let daemon = TestDaemon::start();
     spawn_agent(
         &daemon,
@@ -26,8 +26,9 @@ async fn attach_detaches_on_raw_ctrl_q_q() {
     let mut client = PtyClient::spawn_attach(&daemon, "agent");
     settle();
 
-    // Raw Ctrl-Q (DC1) followed by lowercase q.
-    client.send_bytes(b"\x11q");
+    // Raw Ctrl-\ (FS, 0x1c) — the encoding sent when the agent has not
+    // enabled the kitty keyboard protocol.
+    client.send_bytes(b"\x1c");
 
     assert!(
         client.wait_for_substring(b"[detached:", Duration::from_secs(2)),
@@ -42,7 +43,7 @@ async fn attach_detaches_on_raw_ctrl_q_q() {
 }
 
 #[tokio::test]
-async fn attach_detaches_on_csi_u_ctrl_q_q() {
+async fn attach_detaches_on_csi_u_ctrl_backslash() {
     let daemon = TestDaemon::start();
     spawn_agent(
         &daemon,
@@ -54,9 +55,10 @@ async fn attach_detaches_on_csi_u_ctrl_q_q() {
     let mut client = PtyClient::spawn_attach(&daemon, "agent");
     settle();
 
-    // CSI-u encoded Ctrl-Q (codepoint 113, modifier 5 = Ctrl) followed
-    // by CSI-u encoded lowercase q.
-    client.send_bytes(b"\x1b[113;5u\x1b[113u");
+    // CSI-u encoded Ctrl-\: codepoint 92 ('\\') with modifier 5 (Ctrl).
+    // This is the form arriving when the agent has enabled kitty kbd
+    // protocol level 1 (disambiguate escape codes).
+    client.send_bytes(b"\x1b[92;5u");
 
     assert!(
         client.wait_for_substring(b"[detached:", Duration::from_secs(2)),
@@ -89,7 +91,7 @@ async fn attach_forwards_user_input_to_agent() {
     );
 
     // Detach cleanly so the harness can verify exit.
-    client.send_bytes(b"\x11q");
+    client.send_bytes(b"\x1c");
     let exit = client
         .wait_for_exit(Duration::from_secs(2))
         .expect("attach client should exit after detach");
@@ -159,7 +161,7 @@ async fn attach_replays_backlog_on_reconnect() {
     );
 
     // Detach cleanly so the harness can verify exit.
-    client.send_bytes(b"\x11q");
+    client.send_bytes(b"\x1c");
     let exit = client
         .wait_for_exit(Duration::from_secs(2))
         .expect("attach client should exit after detach");
