@@ -14,20 +14,19 @@ Required behaviors:
 
 1. Spawn a Claude Code session under picoswarm's session daemon, optionally with a working directory (e.g. a git worktree).
 2. List currently registered agents with their status.
-3. Re-attach to a previously spawned agent in a kitty tab and interact with it normally.
+3. Re-attach to a previously spawned agent from any terminal and interact with it normally. Window placement is the user's responsibility (e.g. opening a new kitty tab manually and running `pswarm attach <name>` inside it).
 4. Detach from an attached agent without killing it.
 5. Kill an agent and clean it out of the registry.
-6. A `doctor` subcommand that reports daemon status and adapter (kitty) availability.
+6. A `doctor` subcommand that reports daemon status and environment.
 
 Out of MVP (deferred until a concrete need arises):
 
+- A kitty (or any other) adapter that automates window placement on `pswarm run` / `pswarm attach`. Add this once managing kitty tabs by hand becomes annoying enough to motivate it.
 - `send` (programmatic input from outside an attached client)
 - `link` / `tag` / parent-child relationships
-- `--json` output, scripting affordances
 - Agents calling `pswarm` on themselves (the env-var-carrying-id design)
 - Multiple-client concurrent attach (read-only observers)
 - Screen restoration on reattach (raw bytes + recent-output buffer is the MVP behavior)
-- Adapters other than kitty
 
 ---
 
@@ -43,9 +42,10 @@ Items 1–6 in the MVP definition above.
 
 Triggered by gaps that show up in real use, not by this list. Likely candidates, in no particular order:
 
+- A kitty adapter — on `pswarm run`, open a new kitty tab and run `pswarm attach <name>` inside it. The trigger to build this is the user finding manual tab placement tedious.
 - `send` (with a clear story for keys vs. text vs. signals)
 - Agent self-invocation (env var, `pswarm send self ...` guard)
-- A second adapter (wezterm or zellij) once another environment matters
+- Adapters for other terminals (wezterm, zellij, …) once another environment matters
 - `tag` / `link` for grouping when there are enough agents to need it
 - TUI (`pswarm tui`) only if the CLI list view stops being sufficient
 
@@ -84,26 +84,27 @@ These need to be settled before or during MVP implementation. Listed in the orde
 src/
 ├── main.rs            # dispatch (parse CLI, route to client or daemon code path)
 ├── cli.rs             # clap definitions
-├── protocol.rs        # shared wire types
-├── error.rs           # crate-wide error types
+├── protocol.rs        # shared wire types and frame I/O
 ├── paths.rs           # XDG path helpers (socket, log, config)
 ├── daemon/
 │   ├── mod.rs         # entrypoint for `pswarm daemon`
 │   ├── lifecycle.rs   # daemonize + tokio runtime startup
 │   ├── server.rs      # Unix socket accept loop + per-client task
-│   ├── session.rs     # per-PTY state, ring buffer, fan-out to attached client
+│   ├── session.rs     # PTY spawn, ring buffer drain
 │   └── registry.rs    # in-memory agent map (lives inside the daemon)
-├── client/
-│   ├── mod.rs         # entrypoint for client subcommands
-│   └── attach.rs      # raw-mode + bidirectional streaming loop
-└── adapter/
-    ├── mod.rs         # PaneHost trait + auto-detect
-    └── kitty.rs       # kitty remote control implementation
+└── client/
+    ├── mod.rs         # client subcommand entrypoints
+    ├── connection.rs  # connect + Hello handshake + auto-spawn daemon
+    ├── doctor.rs
+    ├── run.rs
+    ├── ls.rs
+    ├── rm.rs
+    └── attach.rs      # raw-mode + bidirectional streaming loop (TBD)
 ```
 
 Notes:
 - `registry.rs` lives inside `daemon/` because the registry is in-memory and dies with the daemon. Wire types stay in the shared `protocol.rs`; the daemon converts between its internal representation and `AgentSummary` at the protocol boundary.
-- `cli.rs` will receive the clap definitions currently inlined in `main.rs` once `main.rs` starts dispatching to module entry points.
+- An `adapter/` module will appear when the kitty adapter is added (post-MVP).
 
 ---
 
@@ -111,11 +112,10 @@ Notes:
 
 In order:
 
-1. ~~Initialize the Cargo project~~ **Done**.
+1. ~~Initialize the Cargo project.~~ **Done**.
 2. ~~Decide the client-daemon protocol shape and capture it in `docs/protocol.md`.~~ **Done**.
 3. ~~Settle the remaining open design decisions.~~ **Done** (registry persistence, daemonization, env policy, log path, name validation, repo layout — see "Resolved" above). The only thing still open is the no-client PTY size policy, which can be decided when the resize path is wired.
-4. Implement the daemon: socket listener, session table, PTY spawn via `portable-pty`, ring buffer, basic message loop.
-5. Implement the client `attach` loop: connect to the daemon, forward stdin/stdout, handle the detach key (`Ctrl-\`).
-6. Implement `pswarm run`, `pswarm ls`, `pswarm rm`, `pswarm doctor`. The daemon holds the registry in memory.
-7. Wire the kitty adapter: on `pswarm run`, open a new kitty tab and run `pswarm attach <name>` in it.
-8. Live-use the MVP. Capture friction in this file, decide what (if anything) graduates from "Next" into the next iteration.
+4. ~~Implement the daemon: socket listener, session table, PTY spawn via `portable-pty`, ring buffer.~~ **Done** for `run` / `ls` / `rm` / `doctor` (Hello + Ping/Pong + Run/Ls/Rm). Attach handling still pending.
+5. Implement the client `attach` loop: connect to the daemon, forward stdin/stdout, handle the detach key (`Ctrl-\`). Adds the `crossterm` dependency for raw mode and `SIGWINCH`. Daemon-side: per-agent session task that fans out PTY output to the ring buffer and any attached client.
+6. Switch `pswarm run` to default-attach (matching the `docker run` mental model that motivated the verb) and add `-d` / `--detach` for the current spawn-only behavior.
+7. Live-use the MVP and capture friction in this file. Decide which "Next" candidate (likely the kitty adapter) graduates first based on what actually hurts.
