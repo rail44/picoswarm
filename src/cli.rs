@@ -33,8 +33,12 @@ pub enum Command {
     /// List currently registered agents.
     Ls {
         /// Emit machine-readable JSON.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "names")]
         json: bool,
+        /// Emit only the agent names, one per line. Convenient for shell
+        /// completion or piping into `xargs`.
+        #[arg(long)]
+        names: bool,
     },
     /// Attach to an existing agent in the current terminal.
     Attach {
@@ -51,6 +55,19 @@ pub enum Command {
     },
     /// Report daemon status and adapter availability.
     Doctor,
+    /// Remove agents whose process has already exited.
+    Clean,
+    /// Print the current working directory of a running agent. Useful in
+    /// shell wrappers, e.g. `cd (pswarm cwd feat-x)` in fish.
+    Cwd {
+        /// Name of the agent to query.
+        name: String,
+    },
+    /// Generate shell completion scripts.
+    Completions {
+        /// Target shell. Currently only `fish` is supported.
+        shell: String,
+    },
     /// Manage the picoswarm daemon lifecycle.
     Daemon {
         #[command(subcommand)]

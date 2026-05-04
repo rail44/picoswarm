@@ -24,9 +24,9 @@ fn main() -> anyhow::Result<()> {
             init_client_tracing();
             client_runtime().block_on(client::run::run(name, detach, cmd))
         }
-        cli::Command::Ls { json } => {
+        cli::Command::Ls { json, names } => {
             init_client_tracing();
-            client_runtime().block_on(client::ls::run(json))
+            client_runtime().block_on(client::ls::run(json, names))
         }
         cli::Command::Rm { name, force } => {
             init_client_tracing();
@@ -35,6 +35,18 @@ fn main() -> anyhow::Result<()> {
         cli::Command::Attach { name } => {
             init_client_tracing();
             client_runtime().block_on(client::attach::run(name))
+        }
+        cli::Command::Clean => {
+            init_client_tracing();
+            client_runtime().block_on(client::clean::run())
+        }
+        cli::Command::Cwd { name } => {
+            init_client_tracing();
+            client_runtime().block_on(client::cwd::run(name))
+        }
+        cli::Command::Completions { shell } => {
+            init_client_tracing();
+            client_runtime().block_on(client::completions::run(shell))
         }
     }
 }

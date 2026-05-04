@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Hard cap on a single frame's payload size, to keep a malformed length
 /// prefix from triggering an arbitrarily large allocation.
@@ -82,6 +82,13 @@ pub enum ClientToDaemon {
     Shutdown,
     /// Ask the daemon for runtime stats (used by `pswarm doctor`).
     Status,
+    /// Sweep dead agents from the registry (used by `pswarm clean`).
+    Clean,
+    /// Ask the daemon for the current working directory of a running
+    /// agent's process (read from `/proc/<pid>/cwd`).
+    GetCwd {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +119,17 @@ pub enum DaemonToClient {
         agent_count: u32,
         /// Daemon binary version (CARGO_PKG_VERSION at build time).
         version: String,
+    },
+    /// Response to `ClientToDaemon::Clean`. Lists the names that were
+    /// removed from the registry.
+    Cleaned {
+        removed: Vec<String>,
+    },
+    /// Response to `ClientToDaemon::GetCwd`. `path` is `None` when the
+    /// agent has no PID, the `/proc/<pid>/cwd` symlink can't be read, or
+    /// the daemon does not support cwd discovery on this platform.
+    AgentCwd {
+        path: Option<PathBuf>,
     },
 }
 

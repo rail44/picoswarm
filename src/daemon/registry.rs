@@ -132,4 +132,49 @@ impl Registry {
         }
         inner.by_name.clear();
     }
+
+    /// Drop every registered agent whose process has exited. Returns the
+    /// names that were removed.
+    pub fn prune_dead(&self) -> Vec<String> {
+        let mut inner = self.inner.lock().unwrap();
+
+        // First sweep: refresh `dead` flags for entries we haven't yet
+        // observed exit on.
+        for entry in inner.by_id.values() {
+            if !entry.dead.load(Ordering::Relaxed)
+                && let Ok(mut child) = entry.child.lock()
+                && let Ok(Some(_)) = child.try_wait()
+            {
+                entry.dead.store(true, Ordering::Relaxed);
+            }
+        }
+
+        // Second sweep: collect dead ids, then remove.
+        let dead_ids: Vec<Uuid> = inner
+            .by_id
+            .iter()
+            .filter(|(_, entry)| entry.dead.load(Ordering::Relaxed))
+            .map(|(id, _)| *id)
+            .collect();
+
+        let mut removed = Vec::with_capacity(dead_ids.len());
+        for id in dead_ids {
+            if let Some(entry) = inner.by_id.remove(&id) {
+                inner.by_name.remove(&entry.name);
+                removed.push(entry.name);
+            }
+        }
+        removed
+    }
+
+    /// Return the running PID of the agent named `name`, or None if the
+    /// agent doesn't exist or has no PID (e.g. the child handle reports
+    /// nothing on this platform).
+    pub fn pid_of(&self, name: &str) -> Option<u32> {
+        let inner = self.inner.lock().unwrap();
+        let id = inner.by_name.get(name)?;
+        let entry = inner.by_id.get(id)?;
+        let child = entry.child.lock().ok()?;
+        child.process_id()
+    }
 }

@@ -193,6 +193,21 @@ async fn handle_oneshot(
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
 
+        ClientToDaemon::Clean => DaemonToClient::Cleaned {
+            removed: registry.prune_dead(),
+        },
+
+        ClientToDaemon::GetCwd { name } => match registry.pid_of(&name) {
+            Some(pid) => {
+                let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok();
+                DaemonToClient::AgentCwd { path }
+            }
+            None => DaemonToClient::Error {
+                code: ErrorCode::NotFound,
+                message: format!("no agent named {name} (or it has no live PID)"),
+            },
+        },
+
         ClientToDaemon::Hello { .. } => DaemonToClient::Error {
             code: ErrorCode::Internal,
             message: "Hello already exchanged".into(),

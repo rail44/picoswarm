@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::client::connection;
 use crate::protocol::{self, AgentStatus, AgentSummary, ClientToDaemon, DaemonToClient};
 
-pub async fn run(json: bool) -> Result<()> {
+pub async fn run(json: bool, names: bool) -> Result<()> {
     let mut stream = connection::connect_with_handshake().await?;
     let (mut reader, mut writer) = stream.split();
     protocol::write_msg(&mut writer, &ClientToDaemon::Ls).await?;
@@ -19,6 +19,10 @@ pub async fn run(json: bool) -> Result<()> {
     if json {
         let view: Vec<AgentView<'_>> = agents.iter().map(AgentView::from).collect();
         println!("{}", serde_json::to_string(&view)?);
+    } else if names {
+        for a in &agents {
+            println!("{}", a.name);
+        }
     } else if agents.is_empty() {
         println!("(no agents)");
     } else {

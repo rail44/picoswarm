@@ -2,7 +2,10 @@
 //! if necessary) and issue requests.
 
 pub mod attach;
+pub mod clean;
+pub mod completions;
 mod connection;
+pub mod cwd;
 pub mod daemon;
 pub mod doctor;
 pub mod ls;
