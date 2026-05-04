@@ -1,0 +1,178 @@
+# Client-Daemon Protocol
+
+This document specifies the wire protocol between the picoswarm CLI client and the picoswarm daemon. Protocol version: **1**.
+
+## Transport
+
+- **Socket path**: `$XDG_RUNTIME_DIR/picoswarm/sock`. If `$XDG_RUNTIME_DIR` is not set, fall back to `$HOME/.local/run/picoswarm/sock`. The parent directory is created with mode `0700` if missing; the socket itself is mode `0600` (only the owning user can connect).
+- **Single-instance**: only one daemon may bind the socket. The daemon detects collision by attempting to bind; if the socket exists and a connection succeeds, it exits silently. If the socket exists but no daemon answers, it removes the stale socket and re-binds.
+- **Auto-start**: when a client connects and gets `ECONNREFUSED` or `ENOENT`, it forks a daemon (`pswarm daemon` invocation) and retries with backoff up to 2 seconds.
+
+## Framing
+
+Each message is a length-prefixed frame:
+
+```
+[ u32 length, little-endian ] [ payload bytes ]
+```
+
+The payload is a [`postcard`](https://docs.rs/postcard) serialization of one envelope variant (see "Messages" below).
+
+## Versioning handshake
+
+Immediately after a TCP-style `accept`, both sides exchange a `Hello`:
+
+1. The client sends `ClientToDaemon::Hello { protocol_version }` first.
+2. The daemon responds with `DaemonToClient::Hello { protocol_version }` if the version matches, or `DaemonToClient::Error { code: ProtocolMismatch, message }` and closes if not.
+
+Both sides report version `1` for now. The version is bumped only when the wire format becomes backwards-incompatible.
+
+## Messages
+
+```rust
+// shared types
+
+pub struct TermSize { pub rows: u16, pub cols: u16 }
+
+pub struct RunRequest {
+    pub name: String,
+    pub cmd: Vec<String>,         // argv; if empty, daemon defaults to ["claude"]
+    pub cwd: Option<PathBuf>,
+    pub env: Vec<(String, String)>,
+    pub initial_size: TermSize,
+}
+
+pub struct AgentSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub status: AgentStatus,
+    pub cwd: Option<PathBuf>,
+    pub created_at: i64,          // unix seconds
+}
+
+pub enum AgentStatus { Running, Idle, Dead, Unknown }
+
+pub enum ErrorCode {
+    NotFound,
+    NameTaken,
+    AlreadyAttached,
+    SpawnFailed,
+    ProtocolMismatch,
+    Internal,
+}
+
+// envelopes
+
+pub enum ClientToDaemon {
+    Hello { protocol_version: u32 },
+    Run(RunRequest),
+    Ls,
+    Attach { name: String, initial_size: TermSize },
+    Detach,
+    Resize(TermSize),
+    Stdin(Vec<u8>),
+    Rm { name: String, force: bool },
+    Ping,
+}
+
+pub enum DaemonToClient {
+    Hello { protocol_version: u32 },
+    Ok,
+    Error { code: ErrorCode, message: String },
+    RunResult { id: Uuid, name: String },
+    AgentList(Vec<AgentSummary>),
+    Stdout(Vec<u8>),
+    SessionEnded { exit_code: Option<i32> },
+    Pong,
+}
+```
+
+Note: the message names align with the user-facing CLI verbs (`Run`, `Rm`, …) rather than introducing a separate technical vocabulary. If a future operation needs to spawn a process without exposing its PTY (e.g. background hooks), it will be added as a distinct message at that point.
+
+## Per-command flows
+
+`H` denotes the Hello exchange (omitted from each diagram for brevity).
+
+### `pswarm run <NAME> [-- CMD...]`
+
+```
+C → D : Run(RunRequest{ name, cmd, cwd, env, initial_size })
+D → C : RunResult { id, name }     |  Error { NameTaken | SpawnFailed | ... }
+< close >
+```
+
+The daemon spawns the process via `portable-pty`, registers the agent, and returns the assigned id.
+
+### `pswarm ls [--json]`
+
+```
+C → D : Ls
+D → C : AgentList([...])
+< close >
+```
+
+The `--json` flag is a client-side rendering choice; the protocol always returns the same `AgentList`.
+
+### `pswarm rm <NAME> [--force]`
+
+```
+C → D : Rm { name, force }
+D → C : Ok                          |  Error { NotFound }
+< close >
+```
+
+If the process is alive, the daemon sends `SIGTERM` then `SIGKILL` after a short grace period, unless `force = true` (immediate `SIGKILL`). The registry row is removed regardless of the prior process state.
+
+### `pswarm attach <NAME>`
+
+```
+C → D : Attach { name, initial_size }
+D → C : Ok                          |  Error { NotFound | AlreadyAttached }
+D → C : Stdout(...)                  // recent ring-buffer backlog, drained transparently
+[bidirectional streaming]
+  C → D : Stdin(...) | Resize(...) | Detach
+  D → C : Stdout(...) | SessionEnded { exit_code }
+[connection closes when either Detach or SessionEnded fires]
+```
+
+The backlog is sent as ordinary `Stdout` frames; the client cannot tell where backlog ends and live output begins.
+
+### `pswarm doctor`
+
+```
+C → D : Ping
+D → C : Pong
+< close >
+```
+
+Plus client-side local checks: socket existence, daemon process listing, kitty `KITTY_LISTEN_ON` presence, etc.
+
+## Defaults and constants
+
+| Item | Value |
+|---|---|
+| Protocol version | `1` |
+| Stdin/Stdout chunk cap | 16 KB per frame |
+| Per-session ring buffer | 64 KB, in-memory only |
+| Default agent command | `claude` |
+| Detach key | `Ctrl-\` (byte `0x1c`) |
+| Default PTY size when no client attached | 80 × 24 |
+| Auto-start retry window | 2 seconds, exponential backoff |
+| Graceful shutdown window after `SIGTERM` | 1 second before `SIGKILL` |
+
+## Failure modes
+
+| Situation | Behavior |
+|---|---|
+| Client disconnects mid-attach without sending `Detach` | Daemon treats it as a detach: PTY stays alive, agent status set to `Idle`. |
+| Daemon dies (panic, SIGKILL) | All live agent processes die with it (children of the daemon). On next `pswarm` invocation a fresh daemon starts; on startup the daemon reconciles the registry, marking previously-`Running` agents as `Dead`. |
+| Process inside an agent exits | Daemon emits `SessionEnded { exit_code }` to any attached client, marks the agent `Dead`. Registry row remains until `pswarm rm` removes it. |
+| Two clients try to attach to the same agent | Second `Attach` returns `Error { AlreadyAttached }`. Multi-client read-only attach is a future feature, not MVP. |
+| Protocol version mismatch | Daemon returns `Error { ProtocolMismatch }` and closes. The client surfaces an error suggesting the daemon needs to be restarted to match the upgraded binary. A dedicated `pswarm daemon-restart` subcommand may be added later. |
+
+## Out of scope (for this protocol version)
+
+- Streaming logs without attaching (`peek` / `logs` subcommands).
+- Sending text to an unattached agent (`send`).
+- Multi-client concurrent attach.
+- Authenticated multi-user access (the socket relies on filesystem permissions only).

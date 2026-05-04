@@ -47,7 +47,7 @@ Components:
 - Rust
 - `portable-pty` for PTY operations
 - `tokio` for async I/O in the daemon
-- `serde` + `bincode` for the client-daemon protocol
+- `serde` + `postcard` for the client-daemon protocol
 - `rusqlite` (bundled) for the registry
 - `clap` (derive) for the CLI
 - `directories` for XDG paths
@@ -76,6 +76,7 @@ Commit messages, documentation (README, files under `docs/`), and in-code commen
 
 If you are about to propose something that violates one of these — for "simplicity" or to satisfy a feature request — confirm with the human first.
 
+- The primary UX is CLI subcommands that compose with the shell. Do not make an interactive TUI the primary entry point. A TUI may be added later as a complementary view, but `pswarm` must remain useful as one-shot commands (this is the main differentiator from existing TUI-driven managers like ccmanager).
 - picoswarm owns its session daemon. Do not introduce a hard dependency on tmux, shpool, or other external session managers as the primary path.
 - Adapters (display / window management) stay fully decoupled from core. Core code is environment-agnostic.
 - The registry's primary key is `agent_id` (UUID); a session handle is an attribute of the agent, not its identity.

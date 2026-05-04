@@ -62,12 +62,10 @@ Triggered by gaps that show up in real use, not by this list. Likely candidates,
 
 These need to be settled before or during MVP implementation. Listed in the order that they likely matter.
 
-1. **Client-daemon protocol shape.** Request/response messages, framing on the Unix socket, how an attach session multiplexes control messages and PTY bytes on the same connection (or two connections). Encoding: `bincode` is the default unless a reason emerges to use length-prefixed JSON.
-2. **Daemon lifecycle.** Auto-start strategy on first client invocation, single-instance guarantee (lockfile? socket-based?), graceful shutdown, what happens to live sessions if the daemon crashes (likely: they die; document it).
-3. **Output ring buffer.** In-memory only or spill to disk? What size? Should there also be a per-session log file on disk for `peek`-style use cases later?
-4. **PTY size and resize.** How a client communicates its terminal size to the daemon, how resizes propagate to the PTY, what happens when no client is attached.
-5. **Detach key.** Default escape sequence used by the client to leave an attach session. Configurable later; needs a reasonable default (e.g. `Ctrl-\` like abduco, since `Ctrl-b` collides with tmux users' muscle memory and `Ctrl-]` is used by ssh).
-6. **Repository layout.** Concrete `src/` module split (daemon vs. client vs. shared). Likely:
+1. ~~**Client-daemon protocol shape.**~~ **Resolved**, see `docs/protocol.md`. Length-prefixed `postcard` envelopes over a Unix socket; message variants align with CLI verbs.
+2. **Daemon lifecycle.** Auto-start strategy on first client invocation (sketched in `docs/protocol.md`), single-instance guarantee via socket bind, graceful shutdown, what happens to live sessions if the daemon crashes (they die; reconcile registry on next start). The auto-start mechanism (how the client forks the daemon process and waits for the socket) still needs to be pinned down.
+3. **PTY size and resize.** How a client communicates its terminal size to the daemon, how resizes propagate to the PTY, what happens when no client is attached. (Defaults captured in `docs/protocol.md`; need to confirm behavior when the connected client is the only sizing authority and disconnects — keep last size, or reset to 80x24?)
+4. **Repository layout.** Concrete `src/` module split (daemon vs. client vs. shared). Likely:
    - `src/main.rs` (dispatch)
    - `src/cli.rs` (clap)
    - `src/daemon/` (server, session, lifecycle)
@@ -76,8 +74,14 @@ These need to be settled before or during MVP implementation. Listed in the orde
    - `src/registry.rs`
    - `src/adapter/` (kitty)
    - `src/paths.rs`, `src/error.rs`
-7. **SQLite schema.** Minimum: `agents(id, name, worktree, cmd, created_at, updated_at)`. `parent_id` and `tags` deferred. `session_handle` (the daemon's identifier for the PTY, e.g. an integer or UUID) is part of the row.
-8. **Config file.** TOML at `$XDG_CONFIG_HOME/picoswarm/config.toml`. May not be needed for MVP at all — defaults plus CLI flags may be enough.
+5. **SQLite schema.** Minimum: `agents(id, name, worktree, cmd, created_at, updated_at, status)`. `parent_id` and `tags` deferred.
+6. **Config file.** TOML at `$XDG_CONFIG_HOME/picoswarm/config.toml`. May not be needed for MVP at all — defaults plus CLI flags may be enough.
+
+### Resolved (captured here for visibility)
+
+- Detach key: `Ctrl-\` (byte `0x1c`). Matches abduco; avoids tmux/ssh collisions.
+- Ring buffer size: 64 KB per session, in-memory only.
+- Encoding: `postcard` (replaced `bincode`, which is unmaintained per RUSTSEC-2025-0141).
 
 ---
 
@@ -85,10 +89,11 @@ These need to be settled before or during MVP implementation. Listed in the orde
 
 In order:
 
-1. Initialize the Cargo project: `Cargo.toml` with the dependencies listed in CLAUDE.md "Tech choices", a stub `src/main.rs` with a clap skeleton, `.gitignore`, placeholder `README.md`. (No source modules yet — let them emerge as decisions are made.)
-2. Decide the client-daemon protocol shape (open question 1) on paper before writing daemon code. Capture the chosen shape in `docs/plan.md` or a new `docs/protocol.md`.
-3. Implement the daemon: socket listener, session table, PTY spawn via `portable-pty`, ring buffer, basic message loop.
-4. Implement the client `attach` loop: connect, forward stdin/stdout, handle the detach key.
-5. Implement `pswarm new`, `pswarm ls`, `pswarm kill`, `pswarm doctor`. Wire registry (rusqlite).
-6. Wire kitty adapter: on `pswarm new`, open a new kitty tab and run `pswarm attach <name>` in it.
-7. Live-use the MVP. Capture friction in this file, decide what (if anything) graduates from "Next" into the next iteration.
+1. ~~Initialize the Cargo project~~ **Done**.
+2. ~~Decide the client-daemon protocol shape and capture it in `docs/protocol.md`.~~ **Done**.
+3. Settle the remaining open design decisions (daemon lifecycle details, PTY size handling, repo layout, SQLite schema). These are best decided in the order daemon-shape → repo-layout → schema.
+4. Implement the daemon: socket listener, session table, PTY spawn via `portable-pty`, ring buffer, basic message loop.
+5. Implement the client `attach` loop: connect to the daemon, forward stdin/stdout, handle the detach key (`Ctrl-\`).
+6. Implement `pswarm run`, `pswarm ls`, `pswarm rm`, `pswarm doctor`. Wire the registry (rusqlite).
+7. Wire the kitty adapter: on `pswarm run`, open a new kitty tab and run `pswarm attach <name>` in it.
+8. Live-use the MVP. Capture friction in this file, decide what (if anything) graduates from "Next" into the next iteration.
