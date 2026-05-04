@@ -1,6 +1,6 @@
 //! `pswarm ls`: list agents the daemon currently knows about.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::Serialize;
 
 use crate::client::connection;

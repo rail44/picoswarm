@@ -17,7 +17,7 @@ use tokio::net::UnixStream;
 use uuid::Uuid;
 
 use picoswarm::protocol::{
-    self, ClientToDaemon, DaemonToClient, RunRequest, TermSize, PROTOCOL_VERSION,
+    self, ClientToDaemon, DaemonToClient, PROTOCOL_VERSION, RunRequest, TermSize,
 };
 
 /// A daemon instance scoped to one test, with its own runtime/state dirs
@@ -78,7 +78,9 @@ impl TestDaemon {
             DaemonToClient::Hello { protocol_version } if protocol_version == PROTOCOL_VERSION => {}
             other => panic!("unexpected handshake response: {other:?}"),
         }
-        drop((reader, writer));
+        // reader/writer are split borrows of `stream` and go out of scope
+        // here, so the explicit drop wasn't doing anything beyond
+        // signalling intent. Let lifetime end naturally.
         stream
     }
 

@@ -1,7 +1,7 @@
 //! Client-side connection helper: open the Unix socket (auto-starting
 //! the daemon if needed) and complete the Hello handshake.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::net::UnixStream;
@@ -53,7 +53,9 @@ async fn handshake(stream: &mut UnixStream) -> Result<()> {
     .await?;
     let resp: DaemonToClient = protocol::read_msg(&mut reader).await?;
     match resp {
-        DaemonToClient::Hello { protocol_version } if protocol_version == PROTOCOL_VERSION => Ok(()),
+        DaemonToClient::Hello { protocol_version } if protocol_version == PROTOCOL_VERSION => {
+            Ok(())
+        }
         DaemonToClient::Hello { protocol_version } => bail!(
             "daemon speaks protocol {protocol_version}; this client speaks {PROTOCOL_VERSION}. \
              Restart the daemon to match the upgraded binary."

@@ -5,7 +5,7 @@ mod common;
 use std::time::Duration;
 
 use common::pty::PtyClient;
-use common::{spawn_agent, TestDaemon};
+use common::{TestDaemon, spawn_agent};
 
 /// Wait briefly so the attach handshake can complete and the backlog
 /// (if any) can flow through to the PTY before the test starts asserting.

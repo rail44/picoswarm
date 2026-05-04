@@ -2,8 +2,8 @@
 //! output stream over to a per-agent session task, and assemble an
 //! `AgentEntry` that the registry can store.
 
-use anyhow::{anyhow, Context, Result};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use anyhow::{Context, Result, anyhow};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -68,10 +68,7 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
         .master
         .try_clone_reader()
         .context("try_clone_reader failed")?;
-    let writer = pair
-        .master
-        .take_writer()
-        .context("take_writer failed")?;
+    let writer = pair.master.take_writer().context("take_writer failed")?;
 
     let master = Arc::new(Mutex::new(pair.master));
     let child = Arc::new(Mutex::new(child));

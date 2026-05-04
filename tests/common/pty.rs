@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, ExitStatus, PtySize};
+use portable_pty::{Child, CommandBuilder, ExitStatus, PtySize, native_pty_system};
 
 use super::TestDaemon;
 
@@ -44,16 +44,10 @@ impl PtyClient {
         cmd.env("TERM", "xterm-256color");
         cmd.env("RUST_LOG", "warn");
 
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .expect("spawn pswarm attach");
+        let child = pair.slave.spawn_command(cmd).expect("spawn pswarm attach");
         drop(pair.slave);
 
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .expect("try_clone_reader");
+        let reader = pair.master.try_clone_reader().expect("try_clone_reader");
         let writer = pair.master.take_writer().expect("take_writer");
 
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));

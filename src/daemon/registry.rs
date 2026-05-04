@@ -6,7 +6,7 @@
 //! Nothing is persisted to disk: when the daemon dies its child processes
 //! die with it, so reviving registry rows would describe nothing real.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use portable_pty::{Child, MasterPty};
 use std::collections::HashMap;
 use std::io::Write;
@@ -93,12 +93,11 @@ impl Registry {
         let inner = self.inner.lock().unwrap();
         let mut summaries: Vec<AgentSummary> = Vec::with_capacity(inner.by_id.len());
         for entry in inner.by_id.values() {
-            if !entry.dead.load(Ordering::Relaxed) {
-                if let Ok(mut child) = entry.child.lock() {
-                    if let Ok(Some(_)) = child.try_wait() {
-                        entry.dead.store(true, Ordering::Relaxed);
-                    }
-                }
+            if !entry.dead.load(Ordering::Relaxed)
+                && let Ok(mut child) = entry.child.lock()
+                && let Ok(Some(_)) = child.try_wait()
+            {
+                entry.dead.store(true, Ordering::Relaxed);
             }
             summaries.push(entry.summary());
         }

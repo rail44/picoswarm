@@ -1,13 +1,11 @@
 //! `pswarm run`: ask the daemon to spawn a new agent, then attach to it
 //! by default (or just print the assigned id when `--detach` is set).
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use std::path::PathBuf;
 
 use crate::client::{attach, connection};
-use crate::protocol::{
-    self, ClientToDaemon, DaemonToClient, RunRequest, TermSize,
-};
+use crate::protocol::{self, ClientToDaemon, DaemonToClient, RunRequest, TermSize};
 
 pub async fn run(
     name: String,

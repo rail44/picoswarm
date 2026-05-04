@@ -15,11 +15,11 @@
 //! to that file. Useful for figuring out what bytes the user's terminal
 //! is actually sending for a given keypress.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use crossterm::terminal;
 use std::io::{Read, Write};
 use tokio::net::unix::{ReadHalf, WriteHalf};
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
 use crate::client::connection;
@@ -67,10 +67,7 @@ pub async fn run(name: String) -> Result<()> {
     Ok(())
 }
 
-async fn stream_loop(
-    reader: &mut ReadHalf<'_>,
-    writer: &mut WriteHalf<'_>,
-) -> Result<AttachExit> {
+async fn stream_loop(reader: &mut ReadHalf<'_>, writer: &mut WriteHalf<'_>) -> Result<AttachExit> {
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<ClientToDaemon>();
 
     // Stdin -> daemon. A blocking OS thread reads keystrokes from the
@@ -89,10 +86,10 @@ async fn stream_loop(
             if sigwinch.recv().await.is_none() {
                 return;
             }
-            if let Some(size) = current_terminal_size() {
-                if sigwinch_tx.send(ClientToDaemon::Resize(size)).is_err() {
-                    return;
-                }
+            if let Some(size) = current_terminal_size()
+                && sigwinch_tx.send(ClientToDaemon::Resize(size)).is_err()
+            {
+                return;
             }
         }
     });
@@ -223,10 +220,10 @@ fn find_detach_trigger(bytes: &[u8]) -> Option<(usize, usize)> {
     while i < bytes.len() {
         if let Some(prefix_len) = ctrl_q_len(&bytes[i..]) {
             let after = i + prefix_len;
-            if after < bytes.len() {
-                if let Some(cmd_len) = q_len(&bytes[after..]) {
-                    return Some((i, prefix_len + cmd_len));
-                }
+            if after < bytes.len()
+                && let Some(cmd_len) = q_len(&bytes[after..])
+            {
+                return Some((i, prefix_len + cmd_len));
             }
         }
         i += 1;
@@ -286,12 +283,18 @@ fn partial_prefix_at_end(bytes: &[u8]) -> usize {
     let csi_u = b"\x1b[113;5u";
     let max = csi_u.len().min(bytes.len());
     for k in (1..=max).rev() {
-        if &bytes[bytes.len() - k..] == &csi_u[..k] {
+        if bytes[bytes.len() - k..] == csi_u[..k] {
             return bytes.len() - k;
         }
     }
 
     bytes.len()
+}
+
+fn current_terminal_size() -> Option<TermSize> {
+    crossterm::terminal::size()
+        .ok()
+        .map(|(cols, rows)| TermSize { rows, cols })
 }
 
 #[cfg(test)]
@@ -321,10 +324,7 @@ mod tests {
 
     #[test]
     fn csi_u_both() {
-        assert_eq!(
-            find_detach_trigger(b"\x1b[113;5u\x1b[113u"),
-            Some((0, 14))
-        );
+        assert_eq!(find_detach_trigger(b"\x1b[113;5u\x1b[113u"), Some((0, 14)));
     }
 
     #[test]
@@ -382,10 +382,4 @@ mod tests {
     fn partial_prefix_empty() {
         assert_eq!(partial_prefix_at_end(b""), 0);
     }
-}
-
-fn current_terminal_size() -> Option<TermSize> {
-    crossterm::terminal::size()
-        .ok()
-        .map(|(cols, rows)| TermSize { rows, cols })
 }

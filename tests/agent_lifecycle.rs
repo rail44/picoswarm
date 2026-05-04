@@ -49,11 +49,7 @@ async fn list_agents(daemon: &TestDaemon) -> Vec<picoswarm::protocol::AgentSumma
     }
 }
 
-async fn rm_agent(
-    daemon: &TestDaemon,
-    name: &str,
-    force: bool,
-) -> Result<(), (ErrorCode, String)> {
+async fn rm_agent(daemon: &TestDaemon, name: &str, force: bool) -> Result<(), (ErrorCode, String)> {
     let mut stream = daemon.connect().await;
     let (mut reader, mut writer) = stream.split();
     protocol::write_msg(
@@ -94,7 +90,9 @@ async fn rm_removes_the_agent_from_ls() {
     let daemon = TestDaemon::start();
 
     run_agent(&daemon, "beta").await;
-    rm_agent(&daemon, "beta", false).await.expect("rm should succeed");
+    rm_agent(&daemon, "beta", false)
+        .await
+        .expect("rm should succeed");
 
     let agents = list_agents(&daemon).await;
     assert!(
@@ -127,7 +125,9 @@ async fn duplicate_name_returns_name_taken() {
 async fn rm_unknown_returns_not_found() {
     let daemon = TestDaemon::start();
 
-    let err = rm_agent(&daemon, "nope", false).await.expect_err("expected error");
+    let err = rm_agent(&daemon, "nope", false)
+        .await
+        .expect_err("expected error");
     assert_eq!(err.0, ErrorCode::NotFound);
 }
 

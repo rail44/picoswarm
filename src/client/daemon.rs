@@ -2,7 +2,7 @@
 //! commands: they talk to a running daemon via the Unix socket and use
 //! the `Shutdown` protocol message to ask it to exit gracefully.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::client::connection;
 use crate::paths;

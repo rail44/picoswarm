@@ -1,6 +1,6 @@
 //! `pswarm rm`: terminate an agent and remove it from the registry.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::client::connection;
 use crate::protocol::{self, ClientToDaemon, DaemonToClient};
