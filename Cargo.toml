@@ -1,0 +1,22 @@
+[package]
+name = "picoswarm"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "pswarm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+bincode = "2"
+clap = { version = "4.6.1", features = ["derive"] }
+directories = "6.0.0"
+portable-pty = "0.9.0"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.18"
+tokio = { version = "1.52.2", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "signal", "process"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.23.1", features = ["v4", "serde"] }
