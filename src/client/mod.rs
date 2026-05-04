@@ -3,6 +3,7 @@
 
 mod connection;
 pub mod attach;
+pub mod daemon;
 pub mod doctor;
 pub mod ls;
 pub mod rm;

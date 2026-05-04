@@ -69,6 +69,9 @@ pub enum ClientToDaemon {
     Stdin(Vec<u8>),
     Rm { name: String, force: bool },
     Ping,
+    /// Ask the daemon to terminate gracefully: stop accepting new
+    /// connections, kill all live agents, remove the socket, and exit.
+    Shutdown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

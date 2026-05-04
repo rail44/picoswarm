@@ -53,7 +53,21 @@ pub enum Command {
     },
     /// Report daemon status and adapter availability.
     Doctor,
-    /// Run the picoswarm daemon (typically auto-started; rarely invoked manually).
-    #[command(hide = true)]
-    Daemon,
+    /// Manage the picoswarm daemon lifecycle.
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DaemonCommand {
+    /// Run the picoswarm daemon in the foreground or detached. Typically
+    /// auto-started by clients; rarely invoked manually.
+    Start,
+    /// Ask the running daemon to shut down gracefully.
+    Stop,
+    /// Stop the running daemon (if any) and start a fresh one. Useful
+    /// after rebuilding the binary so the new code takes effect.
+    Restart,
 }

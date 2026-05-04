@@ -5,7 +5,17 @@ fn main() -> anyhow::Result<()> {
     let parsed = cli::Cli::parse();
 
     match parsed.command {
-        cli::Command::Daemon => daemon::run(),
+        cli::Command::Daemon { command } => match command {
+            cli::DaemonCommand::Start => daemon::run(),
+            cli::DaemonCommand::Stop => {
+                init_client_tracing();
+                client_runtime().block_on(client::daemon::stop())
+            }
+            cli::DaemonCommand::Restart => {
+                init_client_tracing();
+                client_runtime().block_on(client::daemon::restart())
+            }
+        },
         cli::Command::Doctor => {
             init_client_tracing();
             client_runtime().block_on(client::doctor::run())

@@ -17,6 +17,7 @@ use tokio::net::{
     unix::{ReadHalf, WriteHalf},
     UnixListener, UnixStream,
 };
+use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
 use crate::daemon::output_session::{SessionEvent, SubscribeReply};
@@ -52,16 +53,48 @@ pub async fn run(socket_path: PathBuf) -> Result<()> {
     info!("listening on {}", socket_path.display());
 
     let registry = Registry::new();
+    let shutdown = Arc::new(Notify::new());
 
     loop {
-        let (stream, _) = listener.accept().await?;
-        let reg = registry.clone();
-        tokio::spawn(handle_connection(stream, reg));
+        tokio::select! {
+            biased;
+            _ = shutdown.notified() => {
+                info!("shutdown requested");
+                break;
+            }
+            accept_result = listener.accept() => {
+                let (stream, _) = accept_result?;
+                let reg = registry.clone();
+                let sd = Arc::clone(&shutdown);
+                tokio::spawn(handle_connection(stream, reg, sd));
+            }
+        }
     }
+
+    // Stop accepting new connections, kill every live agent so its child
+    // process doesn't survive as an init orphan, and remove the socket
+    // file. In-flight connection tasks may still be writing their final
+    // responses; we let them race to completion against the daemon's
+    // exit.
+    drop(listener);
+    registry.shutdown_all();
+    if let Err(e) = std::fs::remove_file(&socket_path) {
+        warn!(
+            "failed to remove socket file at {}: {}",
+            socket_path.display(),
+            e
+        );
+    }
+
+    Ok(())
 }
 
-async fn handle_connection(mut stream: UnixStream, registry: Registry) {
-    if let Err(e) = handle_connection_inner(&mut stream, registry).await {
+async fn handle_connection(
+    mut stream: UnixStream,
+    registry: Registry,
+    shutdown: Arc<Notify>,
+) {
+    if let Err(e) = handle_connection_inner(&mut stream, registry, shutdown).await {
         warn!("connection ended: {e:#}");
     }
 }
@@ -69,6 +102,7 @@ async fn handle_connection(mut stream: UnixStream, registry: Registry) {
 async fn handle_connection_inner(
     stream: &mut UnixStream,
     registry: Registry,
+    shutdown: Arc<Notify>,
 ) -> Result<()> {
     let (mut reader, mut writer) = stream.split();
 
@@ -115,6 +149,13 @@ async fn handle_connection_inner(
         ClientToDaemon::Attach { name, initial_size } => {
             handle_attach(name, initial_size, &registry, &mut reader, &mut writer).await?;
         }
+        ClientToDaemon::Shutdown => {
+            // Acknowledge BEFORE notifying the accept loop so the client
+            // sees the Ok even if the listener closes immediately after.
+            protocol::write_msg(&mut writer, &DaemonToClient::Ok).await?;
+            let _ = writer.flush().await;
+            shutdown.notify_one();
+        }
         other => {
             let response = handle_oneshot(other, &registry).await;
             protocol::write_msg(&mut writer, &response).await?;
@@ -144,9 +185,9 @@ async fn handle_oneshot(msg: ClientToDaemon, registry: &Registry) -> DaemonToCli
             message: "Hello already exchanged".into(),
         },
 
-        ClientToDaemon::Attach { .. } => DaemonToClient::Error {
+        ClientToDaemon::Attach { .. } | ClientToDaemon::Shutdown => DaemonToClient::Error {
             code: ErrorCode::Internal,
-            message: "internal routing bug: Attach reached the oneshot handler".into(),
+            message: "internal routing bug: this message should not reach handle_oneshot".into(),
         },
 
         ClientToDaemon::Detach | ClientToDaemon::Resize(_) | ClientToDaemon::Stdin(_) => {

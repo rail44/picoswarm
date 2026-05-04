@@ -120,4 +120,17 @@ impl Registry {
         }
         Some(entry)
     }
+
+    /// Kill every registered agent and clear the registry. Used during
+    /// daemon shutdown so live agent processes do not become orphans of
+    /// init when the daemon exits.
+    pub fn shutdown_all(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        for (_, entry) in inner.by_id.drain() {
+            if let Ok(mut child) = entry.child.lock() {
+                let _ = child.kill();
+            }
+        }
+        inner.by_name.clear();
+    }
 }

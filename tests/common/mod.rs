@@ -32,7 +32,7 @@ impl TestDaemon {
         let socket_path = runtime_path.join("picoswarm").join("sock");
 
         let daemon = Command::new(env!("CARGO_BIN_EXE_pswarm"))
-            .arg("daemon")
+            .args(["daemon", "start"])
             .env("PSWARM_DAEMON_FOREGROUND", "1")
             .env("XDG_RUNTIME_DIR", &runtime_path)
             .env("XDG_STATE_HOME", &runtime_path)

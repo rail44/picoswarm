@@ -27,6 +27,21 @@ pub async fn connect_with_handshake() -> Result<UnixStream> {
     Ok(stream)
 }
 
+/// Connect to the daemon WITHOUT auto-starting it. Returns Err if no
+/// daemon is reachable; useful for `daemon stop` where auto-spawning a
+/// new daemon to immediately tell it to shut down would be silly.
+pub(super) async fn connect_no_spawn() -> Result<UnixStream> {
+    let socket_path = paths::socket_path()?;
+    let mut stream = UnixStream::connect(&socket_path).await.with_context(|| {
+        format!(
+            "no daemon is listening at {} (use `pswarm daemon start`)",
+            socket_path.display()
+        )
+    })?;
+    handshake(&mut stream).await?;
+    Ok(stream)
+}
+
 async fn handshake(stream: &mut UnixStream) -> Result<()> {
     let (mut reader, mut writer) = stream.split();
     protocol::write_msg(
@@ -50,12 +65,12 @@ async fn handshake(stream: &mut UnixStream) -> Result<()> {
     }
 }
 
-fn spawn_daemon() -> Result<()> {
+pub(super) fn spawn_daemon() -> Result<()> {
     let exe = std::env::current_exe().context("could not find own executable path")?;
     std::process::Command::new(&exe)
-        .arg("daemon")
+        .args(["daemon", "start"])
         .spawn()
-        .with_context(|| format!("failed to spawn `{} daemon`", exe.display()))?;
+        .with_context(|| format!("failed to spawn `{} daemon start`", exe.display()))?;
     Ok(())
 }
 
@@ -69,6 +84,32 @@ async fn wait_for_socket(path: &Path) -> Result<UnixStream> {
         if Instant::now() > deadline {
             return Err(anyhow!(
                 "daemon did not become reachable within 2s (socket: {})",
+                path.display()
+            ));
+        }
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(Duration::from_millis(200));
+    }
+}
+
+/// Block until the daemon socket disappears (or fails to accept new
+/// connections). Used after sending Shutdown to confirm the daemon has
+/// actually exited before the caller proceeds.
+pub(super) async fn wait_for_socket_gone(path: &Path) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut delay = Duration::from_millis(20);
+    loop {
+        if !path.exists() {
+            return Ok(());
+        }
+        // Socket file may linger briefly after the daemon dies; if a
+        // connect attempt fails, the daemon is effectively gone.
+        if UnixStream::connect(path).await.is_err() {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            return Err(anyhow!(
+                "daemon socket still reachable after 2s (socket: {})",
                 path.display()
             ));
         }
