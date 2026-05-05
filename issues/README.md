@@ -17,7 +17,7 @@
 
 - ~~05 エージェントライフサイクルログ~~ — 削除 (recovery が out of scope な以上の concrete consumer なし、decision-log #14 に再検討時のメモ)
 - [06 複数クライアントの同時 attach (read-only observers)](06-multi-client-readonly-attach.md) — 延期 (#02 self-invocation 着手 or peek 運用が辛くなった時)
-- [07 Reattach 時の画面復元 (VT parser 導入)](07-screen-restoration-vt-parser.md)
+- ~~07 Reattach 時の画面復元 (VT parser 導入)~~ — 削除 (issue 本文の "最大の摩擦" 主張は未検証の推測。実害が顕在化した時に新規 issue として書き直す)
 - [08 attach せずに直近出力を見る (`pswarm logs` / `peek`)](08-logs-peek-subcommand.md)
 - ~~09 `pswarm rm` の段階的終了 (SIGTERM → SIGKILL)~~ — 解決済み (graceful 1s grace 実装、`--force` で SIGTERM スキップ)
 - ~~10 `pswarm ls` の人間向け出力 enrichment~~ — 不要として却下
