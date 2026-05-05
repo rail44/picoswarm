@@ -3,19 +3,53 @@
 A lightweight orchestrator for running multiple Claude Code (and similar
 CLI coding agent) sessions in parallel. The CLI binary is `pswarm`.
 
-> **Status: WIP / pre-alpha.** Linux-only. Single-user, single-host.
-> The wire protocol, on-disk state, and CLI surface are all unstable
-> and may break between commits without notice. Not recommended for
-> anyone but the author yet.
+> **Status: WIP / pre-alpha.** The wire protocol, on-disk state, and CLI
+> surface may break between commits without notice. Not recommended
+> for anyone but the author yet.
+
+## Why?
+
+picoswarm sits at a particular corner of the agent-orchestration
+design space. The shape comes from a handful of trade-offs:
+
+- **CLI-first, not TUI-first.** A dashboard in front of every
+  operation works well in some workflows; ours wants the
+  orchestrator to compose with shell scripts and to be callable by
+  the agents themselves, so picoswarm exposes everything as
+  one-shot subcommands.
+
+- **Agent-shaped vocabulary.** Running agents directly under tmux
+  (`tmux new-session -d -s feat-x …`, `attach`, `send-keys`) is
+  perfectly viable; picoswarm just packages the same operations
+  with verbs that match what you're doing — `run` / `attach` /
+  `send` / `view` / `cwd` / `clean` — and tracks each agent's
+  identity, cwd, and lifecycle so you don't have to maintain the
+  session-to-agent map yourself.
+
+- **Self-contained PTY daemon, not a wrapper around an external
+  session manager.** Running on top of tmux / shpool / etc. is
+  lighter on code, but it inherits whatever limits that manager has
+  and asks every user to install it.
+
+- **Daemon-owned sessions, not tab-owned ones.** Treating a terminal
+  tab as the session is simpler when sessions don't need to outlive
+  the terminal; we wanted them to.
+
+- **No bundled window management.** Multiplexer-aware orchestrators
+  can offer a tighter out-of-the-box experience inside one
+  multiplexer; picoswarm leaves the window/pane layer to your shell
+  and your terminal's CLI (`kitty @ launch`, `tmux new-window`,
+  `wezterm cli spawn`, …) — see `docs/integration.md`.
+
+- **PTY-wrap the agent's TUI, not its SDK or protocol.** Vendor SDKs
+  and protocols (Claude Code SDK, ACP, etc.) are the right surface
+  for fine-grained programmatic control. The trade is that the
+  coding-agent ecosystem currently moves fastest through the
+  official user-facing TUIs, and SDK-level surfaces tend to lag.
+  picoswarm runs whatever TUI binary the user installs, so upstream
+  improvements arrive without us doing anything.
 
 ## What it does today
-
-A long-running daemon owns each agent's PTY. The CLI starts agents,
-attaches and detaches, sends input without attaching, snapshots
-output, lists / kills agents, and sweeps dead ones. Detach is
-`Ctrl-\`. Agents inherit both the cwd and the env you invoked
-`pswarm run` from, which is what makes `cd <worktree> && pswarm run
-…` Just Work for parallel git worktrees.
 
 ```
 pswarm run -d feat-x -- claude --dangerously-skip-permissions

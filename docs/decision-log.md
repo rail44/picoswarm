@@ -624,3 +624,60 @@ costly (the suite would gain ~12 s of wall time) and the failure
 mode is now well-understood; we rely on the dedicated-thread fix
 plus this entry to keep us honest.
 
+---
+
+## 16. Wrap the agent's TUI in a PTY, don't depend on its SDK or protocol
+
+### Context
+
+The coding-agent space currently has at least three programmatic
+integration surfaces below the actual user-facing terminal app:
+
+- vendor SDKs (Claude Code SDK, etc.)
+- open agent protocols (ACP — Agent Client Protocol)
+- vendor APIs called directly (Anthropic Messages API, OpenAI
+  Responses API, etc.)
+
+An orchestrator could plausibly target any of these instead of
+running the vendor's own TUI binary. picoswarm doesn't.
+
+### Decision
+
+picoswarm runs the official TUI binary the user already has
+installed (`claude`, `codex`, `gemini`, …) inside a PTY held by its
+daemon. The orchestrator never imports an SDK, never speaks a
+vendor's API, never speaks ACP.
+
+### Reasoning
+
+- **Vendor velocity is in the TUI.** New tools, modes, status
+  displays, and ergonomics ship to the agent's user-facing TUI first.
+  SDKs and protocol abstractions lag behind, sometimes permanently —
+  parity isn't even guaranteed direction by the vendor. Running the
+  TUI binary means picoswarm inherits every improvement the moment
+  the user upgrades their agent.
+- **Agent-agnosticism falls out for free.** A PTY-wrapped TUI is just
+  bytes in, bytes out. There's no SDK type, no per-vendor protocol
+  shape, no per-vendor branch in our code. Any PTY-spawnable
+  interactive agent works the same way. (See `CLAUDE.md` Glossary's
+  deliberately broad definition of "agent.")
+- **What we lose is consistent with item 4.** This stance gives up on
+  running agents headlessly via API-only pipelines, on programmatic
+  fine-grained tool intercept, and on transports that don't carry a
+  TTY. Item 4 already locks in that the orchestrator's primary UX is
+  interactive (CLI subcommands composed with shell + agents attached
+  to PTYs), so the loss is consistent with the project's scope.
+
+### Reflection
+
+The choice was implicit until this entry: every earlier decision
+(`portable-pty`/`pty-process`, postcard wire format, daemon ownership
+of PTYs) assumed PTY-wrapping without ever explaining why we didn't
+go SDK-first. Recording it now gives a future "wouldn't it be cleaner
+to use the Claude SDK?" instinct something to push back on.
+
+The trade reveals a property we hadn't named explicitly: picoswarm's
+"agent-agnostic" stance isn't a feature we built — it's a side-effect
+of the integration surface we picked. Surface choice shapes feature
+scope as much as any explicit decision does.
+

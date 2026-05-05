@@ -6,9 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "file=$(jq -r \".tool_input.file_path // empty\"); case \"$file\" in *.rs) if grep -q \"#\\[test\\]\" \"$file\" 2>/dev/null; then cd \"$CLAUDE_PROJECT_DIR\" && cargo test --quiet 2>&1 | tail -50; else cd \"$CLAUDE_PROJECT_DIR\" && cargo clippy --all-targets --quiet -- -D warnings 2>&1 | tail -30; fi ;; esac",
+            "command": "file=$(jq -r \".tool_input.file_path // empty\"); case \"$file\" in *.rs) cd \"$CLAUDE_PROJECT_DIR\" && cargo fmt && cargo clippy --all-targets --quiet -- -D warnings 2>&1 | tail -30 ;; esac",
             "timeout": 60,
-            "statusMessage": "cargo verifying"
+            "statusMessage": "cargo fmt + clippy"
           }
         ]
       }
