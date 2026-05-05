@@ -1,6 +1,15 @@
 # 複数クライアントの同時 attach (read-only observers)
 
 - **Priority:** 中
+- **Status:** 延期 — streaming 用途は #02 (self-invocation) が動いた時点で同時に価値が立つ。それまで peek (#08) で 80% カバー。
+
+### 着手トリガー
+
+下記いずれかが立ち上がったタイミングで再検討:
+
+- #02 (self-invocation) が動いて agent 間の参照関係が表現できた時 (= "agent が別 agent をライブで観察" の前提が揃う)
+- peek (#08) を loop で叩いて代替している運用が辛くなった時
+- #18 (TUI dashboard) を作る時、複数同時 subscribe を必要とする backing として
 
 ### Description
 
