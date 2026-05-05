@@ -445,3 +445,49 @@ build failure that needs a deliberate fix or `#[allow]`. The hope is
 that this small recurring tax pays for itself by surfacing exactly
 the pattern that prompted this decision.
 
+---
+
+## 13. Drop the PaneHost adapter abstraction
+
+### Context
+
+The original design (preserved in `docs/design-discussion.md`, summarised in older revisions of `CLAUDE.md`) named **adapter (PaneHost)** as a first-class component: a Rust trait that picoswarm core would call to open / focus / close terminal panes for attached clients, with **kitty** as the first-class implementation. Issue #01 was filed to build it.
+
+When that issue came up for triage we re-examined the assumption.
+
+### Reconsidering
+
+Two observations made the abstraction look weaker than it had at design time:
+
+1. **Modern terminals' own CLIs are richer than any picoswarm trait would expose.** `kitty @` covers `launch`, `focus-tab`, `close-window`, `set-tab-title`, `send-text --match`, `ls`, etc. Wrapping a subset (`open_pane(name)`) in a Rust trait would always be a lossy compromise; the user would still reach for `kitty @` directly for anything beyond the wrapped subset.
+2. **The same job is a 5-line shell function.** `function pswt; pswarm run -d $argv; kitty @ launch --type=tab pswarm attach $argv[1]; end` does what `pswarm run --tab` would have done, with full access to kitty's flags. Same for tmux, wezterm, etc. Each user gets exactly the integration they want without the picoswarm authors having to anticipate every variation.
+
+The shape of the argument matched item 9 (Backend abstraction drop): an abstraction that everyone can implement at the signature level but only some can implement at the *behavioural* level isn't an abstraction; it's a leaky tag.
+
+### Hook alternatives we considered before settling
+
+If picoswarm needed to invoke external commands (e.g., when an agent itself wants to launch another agent into a pane it doesn't own), four mechanisms were on the table:
+
+- **A. Documentation only** (no code mechanism): users compose with their shell. Adopted for now.
+- **B. `PSWARM_PANE_HOOK` env var**: rejected. Env propagates into spawned agents, and our daemon already broadcasts client env to agents (resolves issue #11). A recursive `pswarm` invocation from inside an agent would inherit the same hook, run it, and potentially loop or run unintended commands.
+- **C. Config-file hook (`config.toml [hooks] pane = "/path/to/script"`)**: deferred. When an agent-launches-agent-into-pane scenario actually shows up, this is the path forward. The hook is a script path (not a shell command string), invoked as `Command::new(path).arg(name)` without shell interpretation, configured in a file the user can audit.
+- **D. Plugin / RPC system**: overkill, rejected.
+
+### Decision
+
+picoswarm core does not embed any terminal- or multiplexer-specific code. Window/pane management is the user's responsibility, composed via their terminal's CLI. The `PaneHost` trait, the `adapter/` module, and the kitty-specific code that issue #01 contemplated are all out of scope. `docs/integration.md` captures the recipes and the future-hook contract.
+
+If a hook becomes necessary, it lands as **option C** (config-file path to an executable script), never **option B** (env variable). This is recorded both here and in `CLAUDE.md` "Decisions that must not drift".
+
+### Reasoning
+
+- **Composition over abstraction.** picoswarm primitives plus a user's shell suffice for every integration we've imagined. Each new abstraction is a permanent maintenance commitment with diminishing returns.
+- **Bounded scope.** Once picoswarm absorbs window management, every related ask ("auto-focus on attach", "close pane on exit", "preview agent output in a status bar") becomes an in-tree feature. Keeping it out of scope keeps the project small.
+- **Security under the env-inherit model.** Our agents inherit the client's env (resolves #11). An env-based hook would silently propagate into every agent and every subshell, with the same value — that's a privilege-escalation surface, not a feature.
+
+### Reflection
+
+Both backend (item 9) and adapter (this item) were rejected for the same shape of reason: an abstraction designed before its concrete needs were known turned out to span only one realistic implementation that worked, and the abstraction itself added cost without buying flexibility. **Lesson: abstractions should be introduced when the second implementation lands, not the first.** Naming the abstraction in advance creates a phantom commitment to fill it in.
+
+The future-hook contract (config-file path to a script, no shell interpretation) is recorded now even though no hook exists — so when the question comes up again, the constraint that env-based hooks are unsafe under our env-inherit model is already on the page.
+

@@ -23,7 +23,7 @@ In scope:
 
 Out of scope:
 
-- Screen splitting and window management (delegated to adapters that drive kitty / wezterm / etc.)
+- Screen splitting and window management. picoswarm provides agent primitives; the user composes them with their terminal's CLI (`kitty @ launch ...`, `tmux new-window ...`, `wezterm cli spawn ...`). See `docs/integration.md`.
 - Job DAG / workflow engine
 - Scheduling / CI integration
 - Implementing a full terminal emulator (we forward bytes; we do not emulate VT state in MVP)
@@ -39,7 +39,6 @@ Components:
 
 - **daemon**: Holds PTYs via `portable-pty`. Multiplexes I/O between PTYs and connected clients. Maintains per-session output ring buffers so a reattaching client can see recent output.
 - **registry**: The daemon's in-memory map from agent id/name to session metadata (name, cwd, status, etc.). Encapsulated by a `Registry` struct. Not persisted to disk: when the daemon dies, its agent processes die with it, so the registry has nothing meaningful to outlive. Persistence may be added later if a use case appears that justifies it.
-- **adapter (PaneHost)**: Abstraction over the user's terminal/multiplexer for opening, focusing, and closing the windows that host attached clients. Implemented as the `PaneHost` trait, fully decoupled from core. First-class adapter: kitty.
 - **single-binary CLI**: An agent (Claude Code itself) must be able to operate its own orchestrator via the `pswarm` command. Do not implement this as a fish/bash function (subshells cannot invoke it).
 
 ### Tech choices
@@ -61,7 +60,6 @@ Not currently used (would only be added if a concrete need arises):
 ### Implementation conventions
 
 - The daemon and client roles share types via internal modules; the protocol module is the only thing both must agree on.
-- Adapters are constructed once at CLI startup from config and passed as handles; do not call adapter implementations directly from core logic.
 - Use `thiserror` for named error types at the library/low level; collapse to `anyhow::Result` in `main` and command handlers.
 - User-facing errors must explain both what failed and what to do next.
 - Tests use mock implementations behind the same internal traits the production code uses.
@@ -78,7 +76,7 @@ If you are about to propose something that violates one of these — for "simpli
 
 - The primary UX is CLI subcommands that compose with the shell. Do not make an interactive TUI the primary entry point. A TUI may be added later as a complementary view, but `pswarm` must remain useful as one-shot commands (this is the main differentiator from existing TUI-driven managers like ccmanager).
 - picoswarm owns its session daemon. Do not introduce a hard dependency on tmux, shpool, or other external session managers as the primary path.
-- Adapters (display / window management) stay fully decoupled from core. Core code is environment-agnostic.
+- Window/pane management is the user's responsibility, composed via their terminal's CLI. picoswarm does not embed terminal-specific logic; if a hook ever lands (for agents launching agents into panes), it is config-file-driven, never env-driven (security: env propagates into agents).
 - The registry's primary key is `agent_id` (UUID); a session handle is an attribute of the agent, not its identity.
 - Agents must be able to invoke the CLI on themselves (single binary, callable from a subshell).
 - Do not build in screen splitting, do not build in a job DAG, do not build in scheduling.
@@ -93,7 +91,6 @@ If you are about to propose something that violates one of these — for "simpli
 - **registry**: The daemon's in-memory store of agent metadata and the agent ↔ session mapping. Not persisted to disk in MVP.
 - **daemon**: The long-lived `pswarm daemon` process that owns all PTYs and serves clients over a Unix socket.
 - **client**: A short-lived `pswarm <subcommand>` invocation that talks to the daemon.
-- **adapter (PaneHost)**: Abstraction over an external tool (kitty, wezterm, etc.) that opens, focuses, and closes the windows hosting attached clients.
 - **cwd**: The working directory the agent process starts in. The user is responsible for placing themselves in the right directory (e.g. a git worktree) before running `pswarm run` — picoswarm does not manage worktrees itself.
 
 ---
