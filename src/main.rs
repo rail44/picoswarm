@@ -13,13 +13,13 @@ fn main() -> anyhow::Result<()> {
     match parsed.command {
         cli::Command::Daemon { command } => match command {
             cli::DaemonCommand::Start => daemon::run(),
-            cli::DaemonCommand::Stop => {
+            cli::DaemonCommand::Stop { force } => {
                 init_client_tracing();
-                client_runtime().block_on(client::daemon::stop())
+                client_runtime().block_on(client::daemon::stop(force))
             }
-            cli::DaemonCommand::Restart => {
+            cli::DaemonCommand::Restart { force } => {
                 init_client_tracing();
-                client_runtime().block_on(client::daemon::restart())
+                client_runtime().block_on(client::daemon::restart(force))
             }
         },
         cli::Command::Doctor => {

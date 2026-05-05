@@ -107,9 +107,21 @@ pub enum DaemonCommand {
     /// Run the picoswarm daemon in the foreground or detached. Typically
     /// auto-started by clients; rarely invoked manually.
     Start,
-    /// Ask the running daemon to shut down gracefully.
-    Stop,
+    /// Ask the running daemon to shut down gracefully. Refuses if any
+    /// agent is currently attached, unless `--force` is given.
+    Stop {
+        /// Shut down even if clients are still attached (their sessions
+        /// will be terminated).
+        #[arg(long, short)]
+        force: bool,
+    },
     /// Stop the running daemon (if any) and start a fresh one. Useful
     /// after rebuilding the binary so the new code takes effect.
-    Restart,
+    /// Refuses if any agent is currently attached, unless `--force` is
+    /// given.
+    Restart {
+        /// Restart even if clients are still attached.
+        #[arg(long, short)]
+        force: bool,
+    },
 }

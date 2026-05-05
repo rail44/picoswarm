@@ -1,6 +1,6 @@
 # Client-Daemon Protocol
 
-This document specifies the wire protocol between the picoswarm CLI client and the picoswarm daemon. Protocol version: **6**.
+This document specifies the wire protocol between the picoswarm CLI client and the picoswarm daemon. Protocol version: **7**.
 
 ## Transport
 
@@ -58,6 +58,7 @@ pub enum ErrorCode {
     AlreadyAttached,
     SpawnFailed,
     ProtocolMismatch,
+    ActiveAttachments,  // Shutdown refused while clients are attached
     Internal,
 }
 
@@ -73,7 +74,7 @@ pub enum ClientToDaemon {
     Stdin(Vec<u8>),
     Rm { name: String, force: bool },
     Ping,
-    Shutdown,                       // ask the daemon to exit gracefully
+    Shutdown { force: bool },       // ask the daemon to exit gracefully (refused if attached unless force)
     Status,                         // daemon stats (used by `pswarm doctor`)
     Clean,                          // sweep dead agents from the registry
     GetCwd { name: String },        // read /proc/<pid>/cwd for a running agent
@@ -205,11 +206,14 @@ The daemon does not interpret `payload`; it forwards the bytes verbatim to the w
 ### `pswarm daemon stop` / `restart`
 
 ```
-C → D : Shutdown
-D → C : Ok
+C → D : Shutdown { force }
+D → C : Ok                                 // proceed with shutdown
+      | Error { ActiveAttachments, ... }   // some agents still attached, force=false
 < close >
-[daemon stops accepting new connections, kills every live agent, removes the socket, and exits]
+[on Ok: daemon stops accepting new connections, kills every live agent, removes the socket, and exits]
 ```
+
+If any agent has a client currently attached and `force = false`, the daemon refuses with `Error { ActiveAttachments, message: "<n> agent(s) still attached: ..."}`. The client surfaces the message verbatim. `force = true` skips the check and proceeds; attached clients see their connection drop.
 
 `restart` is `stop` followed by an explicit `pswarm daemon start` re-spawn from the client side.
 

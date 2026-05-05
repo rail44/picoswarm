@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Hard cap on a single frame's payload size, to keep a malformed length
 /// prefix from triggering an arbitrarily large allocation.
@@ -53,6 +53,9 @@ pub enum ErrorCode {
     AlreadyAttached,
     SpawnFailed,
     ProtocolMismatch,
+    /// Returned by `Shutdown` when one or more agents have an attached
+    /// client and the request did not set `force`.
+    ActiveAttachments,
     Internal,
 }
 
@@ -77,7 +80,11 @@ pub enum ClientToDaemon {
     Ping,
     /// Ask the daemon to terminate gracefully: stop accepting new
     /// connections, kill all live agents, remove the socket, and exit.
-    Shutdown,
+    /// If `force` is false and any agent is currently attached, the
+    /// daemon refuses with `Error { ActiveAttachments, ... }`.
+    Shutdown {
+        force: bool,
+    },
     /// Ask the daemon for runtime stats (used by `pswarm doctor`).
     Status,
     /// Sweep dead agents from the registry (used by `pswarm clean`).

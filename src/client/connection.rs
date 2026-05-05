@@ -58,7 +58,9 @@ async fn handshake(stream: &mut UnixStream) -> Result<()> {
         }
         DaemonToClient::Hello { protocol_version } => bail!(
             "daemon speaks protocol {protocol_version}; this client speaks {PROTOCOL_VERSION}. \
-             Restart the daemon to match the upgraded binary."
+             The daemon binary is older than this CLI — try `pswarm daemon restart`. \
+             If that itself fails on the same mismatch (very old daemon refusing the new \
+             shutdown), run `pkill -f 'pswarm daemon'` and retry."
         ),
         DaemonToClient::Error { code, message } => {
             bail!("daemon rejected handshake: {code:?} {message}")

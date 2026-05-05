@@ -193,6 +193,19 @@ impl Registry {
     /// Return the running PID of the agent named `name`, or None if the
     /// agent doesn't exist or has no PID (e.g. the child handle reports
     /// nothing on this platform).
+    /// Names of agents that currently have a client attached. Used by
+    /// the Shutdown handler to refuse non-forced shutdowns while users
+    /// are mid-session.
+    pub fn attached_names(&self) -> Vec<String> {
+        let inner = self.lock_inner();
+        inner
+            .by_id
+            .values()
+            .filter(|e| e.attached.load(Ordering::Relaxed))
+            .map(|e| e.name.clone())
+            .collect()
+    }
+
     pub fn pid_of(&self, name: &str) -> Option<u32> {
         let inner = self.lock_inner();
         let id = inner.by_name.get(name)?;

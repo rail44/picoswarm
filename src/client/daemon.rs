@@ -6,14 +6,18 @@ use anyhow::{Result, bail};
 
 use crate::client::connection;
 use crate::paths;
-use crate::protocol::{self, ClientToDaemon, DaemonToClient};
+use crate::protocol::{self, ClientToDaemon, DaemonToClient, ErrorCode};
 
-pub async fn stop() -> Result<()> {
+pub async fn stop(force: bool) -> Result<()> {
     let mut stream = connection::connect_no_spawn().await?;
     let (mut reader, mut writer) = stream.split();
-    protocol::write_msg(&mut writer, &ClientToDaemon::Shutdown).await?;
+    protocol::write_msg(&mut writer, &ClientToDaemon::Shutdown { force }).await?;
     match protocol::read_msg::<DaemonToClient, _>(&mut reader).await? {
         DaemonToClient::Ok => {}
+        DaemonToClient::Error {
+            code: ErrorCode::ActiveAttachments,
+            message,
+        } => bail!("{message}"),
         DaemonToClient::Error { code, message } => bail!("{code:?}: {message}"),
         other => bail!("unexpected response: {other:?}"),
     }
@@ -26,17 +30,22 @@ pub async fn stop() -> Result<()> {
     Ok(())
 }
 
-pub async fn restart() -> Result<()> {
+pub async fn restart(force: bool) -> Result<()> {
     // Best-effort stop. Tolerate "no daemon running" — a restart with
     // nothing currently running is just a start.
     match connection::connect_no_spawn().await {
         Ok(mut stream) => {
             let (mut reader, mut writer) = stream.split();
-            protocol::write_msg(&mut writer, &ClientToDaemon::Shutdown).await?;
-            // Read the Ok but tolerate any other shape — we're going to
-            // restart regardless.
-            #[allow(clippy::let_underscore_must_use)]
-            let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
+            protocol::write_msg(&mut writer, &ClientToDaemon::Shutdown { force }).await?;
+            match protocol::read_msg::<DaemonToClient, _>(&mut reader).await? {
+                DaemonToClient::Ok => {}
+                DaemonToClient::Error {
+                    code: ErrorCode::ActiveAttachments,
+                    message,
+                } => bail!("{message}"),
+                DaemonToClient::Error { code, message } => bail!("{code:?}: {message}"),
+                other => bail!("unexpected response: {other:?}"),
+            }
             drop(stream);
 
             let socket_path = paths::socket_path()?;

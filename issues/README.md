@@ -29,7 +29,7 @@
 - [16 tag / link / parent-child リレーション](16-tag-link-relationships.md) — 延期 (agent 数 5+ や `--parent self` 需要が出た時に着手)
 - ~~17 Daemon ログのローテーション~~ — 解決済み (tracing-appender で daily rotation + 7 日保持、crash log を分離)
 - ~~21 Daemon ハードクラッシュ時の orphan agent 対策~~ — 解決済み (pty-process に乗換 + `pre_exec` で `PR_SET_PDEATHSIG`)
-- [22 Daemon 再起動時の attach 体験改善](22-attach-on-daemon-restart-ux.md)
+- ~~22 Daemon 再起動時の attach 体験改善~~ — 解決済み (`daemon stop|restart` を attach 中はデフォルト拒否、`-f` で強制、protocol bump 6→7)
 
 ### 低 (要件が固まってから)
 

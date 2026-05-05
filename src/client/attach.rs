@@ -66,7 +66,9 @@ pub async fn run(name: String) -> Result<()> {
         AttachExit::Detached => eprintln!("[detached: {name}]"),
         AttachExit::SessionEnded(Some(code)) => eprintln!("[session ended: code={code}]"),
         AttachExit::SessionEnded(None) => eprintln!("[session ended]"),
-        AttachExit::Closed => eprintln!("[connection closed]"),
+        AttachExit::Closed => eprintln!(
+            "[connection to daemon lost. Run `pswarm doctor` to check daemon state, then `pswarm run` to spawn a fresh agent if needed.]"
+        ),
     }
     Ok(())
 }

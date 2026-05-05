@@ -153,15 +153,31 @@ async fn handle_connection_inner(
         ClientToDaemon::Attach { name, initial_size } => {
             handle_attach(name, initial_size, &registry, &mut reader, &mut writer).await?;
         }
-        ClientToDaemon::Shutdown => {
-            // Acknowledge BEFORE notifying the accept loop so the client
-            // sees the Ok even if the listener closes immediately after.
-            protocol::write_msg(&mut writer, &DaemonToClient::Ok).await?;
-            // Best-effort flush — if it fails the daemon is going down anyway.
-            if let Err(e) = writer.flush().await {
-                debug!("flush after Shutdown ack failed: {e}");
+        ClientToDaemon::Shutdown { force } => {
+            let attached = registry.attached_names();
+            if !force && !attached.is_empty() {
+                protocol::write_msg(
+                    &mut writer,
+                    &DaemonToClient::Error {
+                        code: ErrorCode::ActiveAttachments,
+                        message: format!(
+                            "{} agent(s) still attached: {}. Detach them or rerun with --force.",
+                            attached.len(),
+                            attached.join(", ")
+                        ),
+                    },
+                )
+                .await?;
+            } else {
+                // Acknowledge BEFORE notifying the accept loop so the
+                // client sees the Ok even if the listener closes
+                // immediately after.
+                protocol::write_msg(&mut writer, &DaemonToClient::Ok).await?;
+                if let Err(e) = writer.flush().await {
+                    debug!("flush after Shutdown ack failed: {e}");
+                }
+                shutdown.notify_one();
             }
-            shutdown.notify_one();
         }
         other => {
             let response = handle_oneshot(other, &registry, started_at).await;
@@ -275,7 +291,7 @@ async fn handle_oneshot(
             message: "Hello already exchanged".into(),
         },
 
-        ClientToDaemon::Attach { .. } | ClientToDaemon::Shutdown => DaemonToClient::Error {
+        ClientToDaemon::Attach { .. } | ClientToDaemon::Shutdown { .. } => DaemonToClient::Error {
             code: ErrorCode::Internal,
             message: "internal routing bug: this message should not reach handle_oneshot".into(),
         },
