@@ -34,7 +34,7 @@
 ### 低 (要件が固まってから)
 
 - [18 TUI ビュー (`pswarm tui`) — 補完ビューとして](18-tui-secondary-view.md) — 延期 (agent 数 10+ や watch 需要が出た時に着手)
-- [19 クロスホスト対応](19-cross-host.md)
+- ~~19 クロスホスト対応~~ — 不要として却下
 - [20 pswarm を MCP server としてエージェントに露出](20-mcp-server.md)
 
 ## テンプレート
