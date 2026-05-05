@@ -20,7 +20,7 @@
 - [07 Reattach 時の画面復元 (VT parser 導入)](07-screen-restoration-vt-parser.md)
 - [08 attach せずに直近出力を見る (`pswarm logs` / `peek`)](08-logs-peek-subcommand.md)
 - ~~09 `pswarm rm` の段階的終了 (SIGTERM → SIGKILL)~~ — 解決済み (graceful 1s grace 実装、`--force` で SIGTERM スキップ)
-- [10 `pswarm ls` の人間向け出力に cwd / pid / uptime 等を追加](10-ls-enrichment.md)
+- ~~10 `pswarm ls` の人間向け出力 enrichment~~ — 不要として却下
 - [11 `pswarm run` での env 注入フラグ (`-e KEY=VAL`)](11-run-env-flag.md)
 - ~~12 `AgentStatus::Idle` / `Unknown` を実装するか削除する~~ — 解決済み (削除、protocol bump 3→4)
 - [13 Bash / zsh の補完スクリプト](13-bash-zsh-completions.md)
