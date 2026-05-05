@@ -18,11 +18,21 @@ pub fn socket_path() -> Result<PathBuf> {
     Ok(base.join("picoswarm").join("sock"))
 }
 
-/// The append-only log file the daemon writes its tracing output to.
-pub fn log_path() -> Result<PathBuf> {
+/// Directory holding the daemon's tracing logs (rotated daily) plus
+/// the small append-only crash log that captures stdout/stderr from
+/// the daemonized process.
+pub fn log_dir() -> Result<PathBuf> {
     let dirs = base_dirs()?;
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs.home_dir().join(".local").join("state"));
-    Ok(base.join("picoswarm").join("daemon.log"))
+    Ok(base.join("picoswarm"))
+}
+
+/// Append-only file the daemon's stdout/stderr is redirected to via
+/// `daemonize`. Captures panics and any direct stderr writes from
+/// libraries that bypass tracing. Tracing's own output goes to the
+/// rolling files in [`log_dir`], not here.
+pub fn crash_log_path() -> Result<PathBuf> {
+    Ok(log_dir()?.join("daemon.crash.log"))
 }

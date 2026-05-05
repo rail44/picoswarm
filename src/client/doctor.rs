@@ -9,12 +9,17 @@ use crate::protocol::{self, ClientToDaemon, DaemonToClient};
 
 pub async fn run() -> Result<()> {
     let socket_path = paths::socket_path()?;
-    let log_path = paths::log_path()?;
+    let log_dir = paths::log_dir()?;
+    let crash_log = paths::crash_log_path()?;
     let kitty_listen = std::env::var("KITTY_LISTEN_ON").ok();
 
     println!("client version: {}", env!("CARGO_PKG_VERSION"));
     println!("socket:         {}", socket_path.display());
-    println!("daemon log:     {}", log_path.display());
+    println!(
+        "daemon logs:    {}/daemon.YYYY-MM-DD.log (rotated daily, kept 7 days)",
+        log_dir.display()
+    );
+    println!("crash log:      {}", crash_log.display());
     match &kitty_listen {
         Some(value) => println!("kitty:          KITTY_LISTEN_ON={value}"),
         None => println!("kitty:          KITTY_LISTEN_ON not set (kitty integration unavailable)"),

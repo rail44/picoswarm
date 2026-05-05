@@ -76,7 +76,7 @@ These need to be settled before or during MVP implementation. Listed in the orde
 - Client-daemon protocol shape: see `docs/protocol.md`. Length-prefixed `postcard` envelopes over a Unix socket; message variants align with CLI verbs.
 - Daemonization: use the `daemonize` crate (handles fork / setsid / stdio redirect). The fork happens before the tokio runtime starts.
 - PTY env policy: inherit the daemon's full env, plus inject `PSWARM_DAEMON=1`. Per-agent variables (`PSWARM_AGENT_ID`, `PSWARM_AGENT_NAME`, ...) are added later when agent self-invocation lands.
-- Daemon log path: `$XDG_STATE_HOME/picoswarm/daemon.log` (fallback `$HOME/.local/state/picoswarm/daemon.log`). Append-only for MVP; rotation is out of scope.
+- Daemon log path: `$XDG_STATE_HOME/picoswarm/daemon.YYYY-MM-DD.log` (fallback `$HOME/.local/state/picoswarm/`). Rotated daily by `tracing-appender`, the most recent 7 days are kept. Daemonized stdout/stderr (panics, library writes that bypass tracing) go to a separate `daemon.crash.log` in the same directory; that one is append-only.
 - Agent name validation: must match `^[a-zA-Z0-9._-]{1,64}$`. Enforced at the CLI layer before the request hits the daemon.
 - Repository layout: see "Repository layout" below.
 

@@ -10,8 +10,12 @@ use anyhow::{Context, Result};
 use daemonize::Daemonize;
 use std::fs::{self, OpenOptions};
 use tracing::info;
+use tracing_appender::rolling::{Builder as RollingBuilder, Rotation};
 
 use crate::paths;
+
+/// How many days of rotated tracing logs to keep before pruning.
+const LOG_RETENTION_DAYS: usize = 7;
 
 pub fn start() -> Result<()> {
     let socket_path = paths::socket_path()?;
@@ -24,35 +28,31 @@ pub fn start() -> Result<()> {
     }
 
     if !foreground {
-        let log_path = paths::log_path()?;
-        if let Some(parent) = log_path.parent() {
+        // Stdout/stderr from the daemonized process get redirected to a
+        // dedicated crash log. Tracing's own output goes through the
+        // rolling appender below; this file only catches things that
+        // bypass tracing (panics, direct stderr writes from libraries).
+        let crash_path = paths::crash_log_path()?;
+        if let Some(parent) = crash_path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
-
-        let stdout = OpenOptions::new()
+        let crash = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&log_path)
-            .with_context(|| format!("failed to open {}", log_path.display()))?;
-        let stderr = stdout.try_clone()?;
+            .open(&crash_path)
+            .with_context(|| format!("failed to open {}", crash_path.display()))?;
+        let crash_dup = crash.try_clone()?;
 
         Daemonize::new()
             .working_directory("/")
-            .stdout(stdout)
-            .stderr(stderr)
+            .stdout(crash)
+            .stderr(crash_dup)
             .start()
             .context("failed to daemonize")?;
     }
 
-    // Tracing init runs in either mode. After daemonize, stderr points at
-    // the log file; in foreground mode it is the original terminal/pipe.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    init_tracing(foreground)?;
 
     info!(foreground, "picoswarm daemon starting");
 
@@ -64,5 +64,38 @@ pub fn start() -> Result<()> {
     runtime.block_on(super::server::run(socket_path))?;
 
     info!("picoswarm daemon stopping");
+    Ok(())
+}
+
+fn init_tracing(foreground: bool) -> Result<()> {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    if foreground {
+        // Tests / interactive use: write to the inherited stderr so the
+        // operator (or test harness) sees logs in real time.
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(std::io::stderr)
+            .init();
+        return Ok(());
+    }
+
+    // Background daemon: rotate daily, keep the last LOG_RETENTION_DAYS
+    // files. Filenames look like `daemon.YYYY-MM-DD.log` in `log_dir`.
+    let dir = paths::log_dir()?;
+    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    let appender = RollingBuilder::new()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("daemon")
+        .filename_suffix("log")
+        .max_log_files(LOG_RETENTION_DAYS)
+        .build(&dir)
+        .with_context(|| format!("failed to build rolling log appender in {}", dir.display()))?;
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(appender)
+        .with_ansi(false)
+        .init();
     Ok(())
 }
