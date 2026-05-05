@@ -1,6 +1,16 @@
 # TUI ビュー (`pswarm tui`) — 補完ビューとして
 
 - **Priority:** 低
+- **Status:** 延期 — CLI が十分に効いている間は着手しない。
+
+### 着手トリガー
+
+下記いずれかが立ち上がったタイミングで再検討:
+
+- agent 数が常時 10+ になり `pswarm ls` の出力が辛くなった時 → option 1 (ratatui ダッシュボード)
+- 「ls を 1 Hz で再表示したい」のような軽い watch 需要が出た時 → option 2 (`pswarm watch` だけ先行)
+
+`CLAUDE.md` の "Decisions that must not drift" に「TUI を primary にしない」がある以上、TUI は常に CLI の補完。現状 CLI で困っていない以上、着手の判断は実需要次第。
 
 ### Description
 
