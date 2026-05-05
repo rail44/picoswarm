@@ -15,7 +15,7 @@
 
 ### 中 (機能ギャップ / 既存機能の穴)
 
-- [05 エージェントライフサイクルログ (履歴の永続化)](05-lifecycle-log.md)
+- ~~05 エージェントライフサイクルログ~~ — 削除 (recovery が out of scope な以上の concrete consumer なし、decision-log #14 に再検討時のメモ)
 - [06 複数クライアントの同時 attach (read-only observers)](06-multi-client-readonly-attach.md)
 - [07 Reattach 時の画面復元 (VT parser 導入)](07-screen-restoration-vt-parser.md)
 - [08 attach せずに直近出力を見る (`pswarm logs` / `peek`)](08-logs-peek-subcommand.md)

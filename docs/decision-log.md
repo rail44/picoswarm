@@ -491,3 +491,44 @@ Both backend (item 9) and adapter (this item) were rejected for the same shape o
 
 The future-hook contract (config-file path to a script, no shell interpretation) is recorded now even though no hook exists — so when the question comes up again, the constraint that env-based hooks are unsafe under our env-inherit model is already on the page.
 
+---
+
+## 14. Parked: structured daemon logging vs. a separate lifecycle log
+
+### Context
+
+Issue #05 originally proposed a separate JSONL lifecycle log
+(`spawned` / `attached` / `detached` / `exited` / `removed` events
+with structured payloads). Triage rejected it: the strongest
+motivating use case (recovering past agents on daemon crash) is
+explicitly out of scope per item 8, and the remaining uses (history
+queries, audit, replay) are mostly already covered by `daemon.log`
++ shell history. #05 was deleted rather than deferred.
+
+### The parked question
+
+If at some future point picoswarm *does* want lifecycle events
+queryable programmatically, two paths are open:
+
+- **Reinstate a separate JSONL file** with event-shaped writes from
+  the daemon. Adds an mpsc + writer task; one extra file to
+  rotate/manage.
+- **Switch the daemon-mode tracing subscriber from text to JSON**
+  (`tracing_subscriber::fmt().json()`), keeping foreground stderr
+  output as text. ~10 lines in `daemon/lifecycle.rs::init_tracing`,
+  no new file. Tradeoff: `just log` becomes less pleasant for
+  human-tailing (`jq -C` mitigates, but it's a step down for live
+  development).
+
+The hybrid (foreground=text, background=JSON) is the cheaper of
+the two and reuses existing tracing field usage. The separate-file
+approach is more invasive but gives full control over the schema.
+
+### Decision
+
+Not deciding now. This entry exists so that whoever revisits the
+question doesn't have to re-derive the comparison from scratch. The
+trigger to revisit is the same as #05's original triggers: a real
+consumer wanting structured event data, or a `pswarm history`
+subcommand becoming desirable.
+
