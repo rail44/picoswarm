@@ -347,3 +347,40 @@ The risk we took on in deciding to build picoswarm despite Agent Teams was small
 
 The ground moves. Two months before this conversation, "Claude Code with built-in multi-agent" wouldn't have been a category. It was worth asking whether picoswarm's premise still held, and explicitly recording why it does. If a future development changes that answer (for example: an OS-level standard for agent coordination, or a Claude Code adapter that directly speaks to Codex / Gemini / Cursor), this entry is the place to revisit.
 
+---
+
+## 11. PTY library swap: portable-pty → pty-process
+
+### Context
+
+Issue #21 (orphan agent prevention) wanted to install `PR_SET_PDEATHSIG` on each spawned child so the kernel SIGTERMs them if the daemon dies hard. The natural place to set it is a `pre_exec` closure between fork and exec.
+
+Investigation found that **portable-pty 0.9.0's `CommandBuilder` does not expose `pre_exec`** — its unix backend already calls `Command::pre_exec` once for setsid/TIOCSCTTY setup, and `std::process::Command::pre_exec` is last-write-wins. Adding a hook would require either vendoring portable-pty or sending an upstream PR (no existing wezterm issue/PR for this — checked).
+
+### Tools considered
+
+- **Vendor portable-pty's unix backend**: ~150 LoC fork, ongoing maintenance burden.
+- **Upstream PR to wezterm**: half-day to write, indeterminate merge timeline.
+- **PID file + startup orphan reaper**: 100-150 LoC, doesn't prevent orphans, only cleans them up at next daemon start.
+- **`pswarm reap-orphans` subcommand using `/proc/*/environ`**: 50-70 LoC, manual or auto-triggered.
+- **Switch to `pty-process`** (doy/Jesse Luehrs): exposes `Command::pre_exec` natively, properly chains with internal session_leader setup, ~1-2 hour migration.
+
+### Decision
+
+Switch to `pty-process`. Add `pre_exec` that calls `nix::sys::prctl::set_pdeathsig(SIGTERM)`.
+
+### Reasoning
+
+- The original `docs/decision-log.md` 5 entry rejected pty-process as "less feature-complete than portable-pty" without specifying which features. Re-examining under the current requirement (need `pre_exec`), the assessment flips: pty-process has the feature we want and portable-pty doesn't.
+- "Less feature-complete" was implicitly about Windows ConPTY support — pty-process is Linux/macOS-focused. picoswarm targets POSIX systems (WSL is sufficient for Windows users), so the feature gap is irrelevant.
+- pty-process is actively maintained: 3.46M total downloads, 330K in the last 90 days, last release 2025-07 (0.5.3, edition 2024). Maintainer (doy) is well-known in the Rust ecosystem; cargo and uv reference its API surface.
+- The `unstable-` style risk is lower than clap_complete's: pty-process exposes a stable `pre_exec` (no feature flag), and the API has been frozen since 0.5.0 (Jan 2025).
+- Migration cost was bounded (~150 LoC across `session.rs`, `registry.rs`, `server.rs`, plus `tests/common/pty.rs`), and the resulting `AgentEntry` is structurally simpler — one `Arc<Pty>` replacing three `Arc<Mutex<Box<dyn Trait>>>` fields.
+
+### Reflection
+
+Two lessons:
+
+- **A library-choice decision-log entry should record what was rejected and why.** The original entry 5 said "less feature-complete" without enumerating which features mattered. When requirements shifted (we suddenly needed `pre_exec`), there was no way to tell from the log whether the original rejection still held. Future entries should list the specific axes of comparison.
+- **Multi-threaded `PR_SET_PDEATHSIG` is not the footgun the manpage warns about, in our case.** The man page warns the signal fires when the parent *thread* dies, not the parent process — which would be catastrophic with tokio's blocking thread pool. In practice, tokio's worker threads are pooled and stay alive for the runtime's lifetime, so the signal only fires when the daemon process truly exits. Verified via live test: `kill -9 <daemon>` → child SIGTERM'd within ~1s.
+

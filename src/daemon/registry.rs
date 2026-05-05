@@ -9,10 +9,10 @@
 use anyhow::{Result, anyhow};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
-use portable_pty::{Child, MasterPty};
+use pty_process::blocking::Pty;
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -23,22 +23,20 @@ use uuid::Uuid;
 use crate::daemon::output_session::SessionInbox;
 use crate::protocol::{AgentStatus, AgentSummary};
 
-/// Time to wait between SIGTERM and SIGKILL when terminating a child
-/// gracefully. Matches the value documented in `docs/protocol.md`.
 const GRACEFUL_TERMINATE_GRACE: Duration = Duration::from_secs(1);
 const GRACEFUL_TERMINATE_POLL: Duration = Duration::from_millis(100);
 
-/// Cloneable handle to a single agent. All fields are `Arc`/`Clone` so the
-/// attach handler can hold a snapshot independently of the registry lock.
 #[derive(Clone)]
 pub struct AgentEntry {
     pub id: Uuid,
     pub name: String,
     pub cwd: Option<PathBuf>,
     pub created_at: i64,
-    pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    pub child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
-    pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    pub pty: Arc<Pty>,
+    pub child: Arc<Mutex<Child>>,
+    /// Serialises concurrent writers (attach stdin, send) so multi-byte
+    /// payloads don't interleave at the syscall level.
+    pub write_lock: Arc<Mutex<()>>,
     pub inbox: SessionInbox,
     pub attached: Arc<AtomicBool>,
     pub dead: Arc<AtomicBool>,
@@ -189,39 +187,27 @@ impl Registry {
         let id = inner.by_name.get(name)?;
         let entry = inner.by_id.get(id)?;
         let child = entry.child.lock().ok()?;
-        child.process_id()
+        Some(child.id())
     }
 }
 
-/// Terminate `entry`'s child process. Without `force`, attempts a
-/// graceful SIGTERM first and falls back to SIGKILL after
-/// `GRACEFUL_TERMINATE_GRACE`. With `force`, sends SIGKILL immediately.
 fn terminate_entry(entry: &AgentEntry, force: bool) {
-    let pid = match entry.child.lock().ok().and_then(|c| c.process_id()) {
+    let pid = match entry.child.lock().ok().map(|c| c.id()) {
         Some(pid) => pid,
-        None => {
-            // No live PID — may already have exited. Best-effort kill()
-            // still, in case portable-pty has internal state to release.
-            if let Ok(mut child) = entry.child.lock() {
-                let _ = child.kill();
-            }
-            return;
-        }
+        None => return,
     };
 
     if force {
-        send_sigkill(entry, pid);
+        send_sigkill(entry);
         return;
     }
 
     let nix_pid = Pid::from_raw(pid as i32);
     if let Err(e) = kill(nix_pid, Signal::SIGTERM) {
-        // ESRCH means the child is already gone; nothing more to do.
-        if e != nix::errno::Errno::ESRCH {
-            warn!("SIGTERM to pid {pid} failed: {e}; falling back to SIGKILL");
-        } else {
+        if e == nix::errno::Errno::ESRCH {
             return;
         }
+        warn!("SIGTERM to pid {pid} failed: {e}; falling back to SIGKILL");
     }
 
     let deadline = Instant::now() + GRACEFUL_TERMINATE_GRACE;
@@ -236,14 +222,11 @@ fn terminate_entry(entry: &AgentEntry, force: bool) {
     }
 
     debug!("pid {pid} did not exit within grace period; sending SIGKILL");
-    send_sigkill(entry, pid);
+    send_sigkill(entry);
 }
 
-fn send_sigkill(entry: &AgentEntry, pid: u32) {
+fn send_sigkill(entry: &AgentEntry) {
     if let Ok(mut child) = entry.child.lock() {
         let _ = child.kill();
-    } else {
-        // Fallback: skip portable-pty bookkeeping and signal directly.
-        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
     }
 }

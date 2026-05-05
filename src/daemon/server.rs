@@ -7,7 +7,8 @@
 //! sends `Detach`.
 
 use anyhow::{Context, Result};
-use portable_pty::PtySize;
+use pty_process::Size;
+use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -224,12 +225,13 @@ async fn handle_oneshot(
                 // Write on the blocking pool; the PTY writer is std::io,
                 // and we don't want to stall the async runtime.
                 let result = tokio::task::spawn_blocking(move || {
-                    let mut writer = entry
-                        .writer
+                    let _guard = entry
+                        .write_lock
                         .lock()
-                        .map_err(|_| anyhow::anyhow!("writer mutex poisoned"))?;
-                    writer.write_all(&payload)?;
-                    writer.flush()?;
+                        .map_err(|_| anyhow::anyhow!("write lock poisoned"))?;
+                    let mut w = &*entry.pty;
+                    w.write_all(&payload)?;
+                    w.flush()?;
                     Ok::<(), anyhow::Error>(())
                 })
                 .await;
@@ -417,11 +419,16 @@ async fn handle_attach(
                 };
                 match msg {
                     ClientToDaemon::Stdin(bytes) => {
-                        let writer_handle = Arc::clone(&entry.writer);
+                        let entry_for_write = entry.clone();
+                        let agent_for_log = name.clone();
                         let _ = tokio::task::spawn_blocking(move || {
-                            if let Ok(mut w) = writer_handle.lock() {
-                                let _ = w.write_all(&bytes);
-                                let _ = w.flush();
+                            let Ok(_guard) = entry_for_write.write_lock.lock() else {
+                                warn!("write lock poisoned for {agent_for_log}, dropping stdin chunk");
+                                return;
+                            };
+                            let mut w = &*entry_for_write.pty;
+                            if let Err(e) = w.write_all(&bytes).and_then(|()| w.flush()) {
+                                debug!("stdin write to {agent_for_log} failed (PTY likely gone): {e}");
                             }
                         }).await;
                     }
@@ -446,12 +453,10 @@ async fn handle_attach(
 }
 
 fn apply_resize(entry: &AgentEntry, size: TermSize) {
-    if let Ok(master) = entry.master.lock() {
-        let _ = master.resize(PtySize {
-            rows: size.rows,
-            cols: size.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+    if let Err(e) = entry.pty.resize(Size::new(size.rows, size.cols)) {
+        debug!(
+            "resize to {}x{} failed for {} (PTY likely gone): {e}",
+            size.rows, size.cols, entry.name
+        );
     }
 }

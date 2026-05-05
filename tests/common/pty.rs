@@ -6,17 +6,19 @@
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::process::{Child, ExitStatus};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use portable_pty::{Child, CommandBuilder, ExitStatus, PtySize, native_pty_system};
+use pty_process::Size;
+use pty_process::blocking::{Command, Pty, open};
 
 use super::TestDaemon;
 
 pub struct PtyClient {
-    child: Box<dyn Child + Send + Sync>,
-    writer: Box<dyn Write + Send>,
+    child: Child,
+    pty: Arc<Pty>,
     output: Arc<Mutex<Vec<u8>>>,
     _reader: JoinHandle<()>,
 }
@@ -26,52 +28,40 @@ impl PtyClient {
     pub fn spawn_attach(daemon: &TestDaemon, agent_name: &str) -> Self {
         let runtime_dir = runtime_dir_from_socket(&daemon.socket_path);
 
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .expect("openpty");
+        let (pty, pts) = open().expect("openpty");
+        pty.resize(Size::new(24, 80)).expect("initial resize");
 
-        let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_pswarm"));
-        cmd.args(["attach", agent_name]);
-        cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
-        cmd.env("XDG_STATE_HOME", &runtime_dir);
-        // Some terminal libraries probe TERM; give them something benign.
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("RUST_LOG", "warn");
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_pswarm"));
+        cmd = cmd
+            .args(["attach", agent_name])
+            .env("XDG_RUNTIME_DIR", &runtime_dir)
+            .env("XDG_STATE_HOME", &runtime_dir)
+            // Some terminal libraries probe TERM; give them something benign.
+            .env("TERM", "xterm-256color")
+            .env("RUST_LOG", "warn");
 
-        let child = pair.slave.spawn_command(cmd).expect("spawn pswarm attach");
-        drop(pair.slave);
+        let child = cmd.spawn(pts).expect("spawn pswarm attach");
 
-        let reader = pair.master.try_clone_reader().expect("try_clone_reader");
-        let writer = pair.master.take_writer().expect("take_writer");
-
+        let pty = Arc::new(pty);
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let reader_thread = {
+            let pty = Arc::clone(&pty);
             let output = Arc::clone(&output);
-            std::thread::spawn(move || drain_into(reader, output))
+            std::thread::spawn(move || drain_into(pty, output))
         };
-
-        // Drop the master once we've taken its reader and writer; otherwise
-        // it would keep the slave end open and prevent the child from
-        // seeing EOF when it closes its side.
-        drop(pair.master);
 
         Self {
             child,
-            writer,
+            pty,
             output,
             _reader: reader_thread,
         }
     }
 
     pub fn send_bytes(&mut self, bytes: &[u8]) {
-        self.writer.write_all(bytes).expect("write to PTY");
-        self.writer.flush().expect("flush PTY");
+        let mut w = &*self.pty;
+        w.write_all(bytes).expect("write to PTY");
+        w.flush().expect("flush PTY");
     }
 
     pub fn output_so_far(&self) -> Vec<u8> {
@@ -118,10 +108,10 @@ impl Drop for PtyClient {
     }
 }
 
-fn drain_into(mut reader: Box<dyn Read + Send>, sink: Arc<Mutex<Vec<u8>>>) {
+fn drain_into(pty: Arc<Pty>, sink: Arc<Mutex<Vec<u8>>>) {
     let mut buf = [0u8; 8192];
     loop {
-        match reader.read(&mut buf) {
+        match (&*pty).read(&mut buf) {
             Ok(0) => return,
             Ok(n) => {
                 let mut sink = sink.lock().unwrap();

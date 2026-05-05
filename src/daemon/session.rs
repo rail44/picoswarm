@@ -3,7 +3,10 @@
 //! `AgentEntry` that the registry can store.
 
 use anyhow::{Context, Result, anyhow};
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use nix::sys::prctl;
+use nix::sys::signal::Signal;
+use pty_process::Size;
+use pty_process::blocking::{Command, Pty, open};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,17 +22,10 @@ use crate::protocol::RunRequest;
 pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
     validate_name(&req.name)?;
 
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: req.initial_size.rows,
-            cols: req.initial_size.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .context("openpty failed")?;
+    let (pty, pts) = open().context("openpty failed")?;
+    pty.resize(Size::new(req.initial_size.rows, req.initial_size.cols))
+        .context("initial resize failed")?;
 
-    // Default to `claude` when the client sends an empty argv.
     let argv: Vec<String> = if req.cmd.is_empty() {
         vec!["claude".to_string()]
     } else {
@@ -39,56 +35,54 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
         .split_first()
         .ok_or_else(|| anyhow!("empty cmd after defaulting"))?;
 
-    let mut cmd = CommandBuilder::new(program);
+    let mut cmd = Command::new(program);
     for arg in rest {
-        cmd.arg(arg);
+        cmd = cmd.arg(arg);
     }
     if let Some(cwd) = &req.cwd {
-        cmd.cwd(cwd);
+        cmd = cmd.current_dir(cwd);
     }
 
-    // Build the agent's env in three layers, last write wins:
-    //   1. daemon process env — baseline (PATH, HOME, etc. that lived
-    //      with the daemon since its first auto-spawn).
-    //   2. request env — propagated from the connecting client. This is
-    //      what makes `pswarm run` feel like running a process in the
-    //      user's current shell.
-    //   3. PSWARM_DAEMON=1 — daemon-controlled invariant, set last so
-    //      the client cannot override it (intentionally or otherwise).
+    // Env in three layers, last write wins:
+    //   daemon env -> request env -> PSWARM_DAEMON=1 (daemon-controlled)
     for (k, v) in std::env::vars() {
-        cmd.env(k, v);
+        cmd = cmd.env(k, v);
     }
     for (k, v) in &req.env {
-        cmd.env(k, v);
+        cmd = cmd.env(k, v);
     }
-    cmd.env("PSWARM_DAEMON", "1");
+    cmd = cmd.env("PSWARM_DAEMON", "1");
 
-    let child = pair
-        .slave
-        .spawn_command(cmd)
+    // PR_SET_PDEATHSIG: kernel SIGTERMs the child if the daemon dies
+    // hard, preventing orphan agents reparented to init (issue #21).
+    unsafe {
+        cmd = cmd.pre_exec(|| {
+            prctl::set_pdeathsig(Signal::SIGTERM)
+                .map_err(|e| std::io::Error::from_raw_os_error(e as i32))
+        });
+    }
+
+    let child = cmd
+        .spawn(pts)
         .context("failed to spawn the agent process")?;
-    debug!("spawned {} (pid {:?})", req.name, child.process_id());
-    drop(pair.slave);
+    debug!("spawned {} (pid {})", req.name, child.id());
 
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .context("try_clone_reader failed")?;
-    let writer = pair.master.take_writer().context("take_writer failed")?;
-
-    let master = Arc::new(Mutex::new(pair.master));
+    let pty = Arc::new(pty);
     let child = Arc::new(Mutex::new(child));
-    let writer = Arc::new(Mutex::new(writer));
+    let write_lock = Arc::new(Mutex::new(()));
     let attached = Arc::new(AtomicBool::new(false));
     let dead = Arc::new(AtomicBool::new(false));
 
-    // The session task gets an `on_eof` closure that captures the child
-    // handle so it can report the exit code and flip the `dead` flag.
     let child_for_eof = Arc::clone(&child);
     let dead_for_eof = Arc::clone(&dead);
     let on_eof = move || {
         let exit = match child_for_eof.lock() {
-            Ok(mut c) => c.try_wait().ok().flatten().map(|s| s.exit_code() as i32),
+            Ok(mut c) => c
+                .try_wait()
+                .ok()
+                .flatten()
+                .and_then(|s| s.code())
+                .or(Some(0)),
             Err(_) => None,
         };
         dead_for_eof.store(true, Ordering::Relaxed);
@@ -97,11 +91,11 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
 
     let (chunk_tx, inbox) = output_session::spawn(on_eof);
 
-    // Drain the master into the session task on a dedicated OS thread.
+    let pty_for_read = Arc::clone(&pty);
     let agent_name = req.name.clone();
     thread::Builder::new()
         .name(format!("pty-reader/{}", agent_name))
-        .spawn(move || drain_into_session(&agent_name, reader, chunk_tx))
+        .spawn(move || drain_into_session(&agent_name, pty_for_read, chunk_tx))
         .context("failed to start the PTY reader thread")?;
 
     Ok(AgentEntry {
@@ -109,19 +103,21 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
         name: req.name,
         cwd: req.cwd,
         created_at: now_unix(),
-        master,
+        pty,
         child,
-        writer,
+        write_lock,
         inbox,
         attached,
         dead,
     })
 }
 
-fn drain_into_session(agent_name: &str, mut reader: Box<dyn Read + Send>, sink: ChunkSender) {
+fn drain_into_session(agent_name: &str, pty: Arc<Pty>, sink: ChunkSender) {
     let mut buf = [0u8; 8192];
     loop {
-        match reader.read(&mut buf) {
+        // `&Pty` impls Read, so the reader thread can read from the
+        // shared Arc<Pty> without taking the write lock.
+        match (&*pty).read(&mut buf) {
             Ok(0) => {
                 debug!("PTY reader for {} reached EOF", agent_name);
                 return;

@@ -335,8 +335,10 @@ async fn run_propagates_request_env_to_agent() {
     let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
     drop(stream);
 
+    // Wait for non-empty content; `outpath.exists()` alone races with
+    // the shell's `>` redirect, which truncates before `printenv` writes.
     for _ in 0..40 {
-        if outpath.exists() {
+        if outpath.metadata().map(|m| m.len() > 0).unwrap_or(false) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -374,8 +376,10 @@ async fn pswarm_daemon_env_cannot_be_overridden_by_request() {
     let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
     drop(stream);
 
+    // Wait for non-empty content; `outpath.exists()` alone races with
+    // the shell's `>` redirect, which truncates before `printenv` writes.
     for _ in 0..40 {
-        if outpath.exists() {
+        if outpath.metadata().map(|m| m.len() > 0).unwrap_or(false) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
