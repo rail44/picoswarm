@@ -1,5 +1,10 @@
 //! PTY-driven harness for testing `pswarm attach`.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::let_underscore_must_use)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use
+)]
 //!
 //! Spawns `pswarm attach <name>` inside a fresh PTY, drains the master
 //! into an output buffer on a background OS thread, and exposes a tiny
@@ -48,7 +53,7 @@ impl PtyClient {
         let reader_thread = {
             let pty = Arc::clone(&pty);
             let output = Arc::clone(&output);
-            std::thread::spawn(move || drain_into(pty, output))
+            std::thread::spawn(move || drain_into(&pty, &output))
         };
 
         Self {
@@ -59,7 +64,7 @@ impl PtyClient {
         }
     }
 
-    pub fn send_bytes(&mut self, bytes: &[u8]) {
+    pub fn send_bytes(&self, bytes: &[u8]) {
         let mut w = &*self.pty;
         w.write_all(bytes).expect("write to PTY");
         w.flush().expect("flush PTY");
@@ -109,16 +114,15 @@ impl Drop for PtyClient {
     }
 }
 
-fn drain_into(pty: Arc<Pty>, sink: Arc<Mutex<Vec<u8>>>) {
+fn drain_into(pty: &Arc<Pty>, sink: &Arc<Mutex<Vec<u8>>>) {
     let mut buf = [0u8; 8192];
     loop {
-        match (&*pty).read(&mut buf) {
-            Ok(0) => return,
+        match (&**pty).read(&mut buf) {
+            Ok(0) | Err(_) => return,
             Ok(n) => {
                 let mut sink = sink.lock().unwrap();
                 sink.extend_from_slice(&buf[..n]);
             }
-            Err(_) => return,
         }
     }
 }

@@ -76,15 +76,13 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
     let child_for_eof = Arc::clone(&child);
     let dead_for_eof = Arc::clone(&dead);
     let on_eof = move || {
-        let exit = match child_for_eof.lock() {
-            Ok(mut c) => c
-                .try_wait()
+        let exit = child_for_eof.lock().ok().and_then(|mut c| {
+            c.try_wait()
                 .ok()
                 .flatten()
                 .and_then(|s| s.code())
-                .or(Some(0)),
-            Err(_) => None,
-        };
+                .or(Some(0))
+        });
         dead_for_eof.store(true, Ordering::Relaxed);
         exit
     };
@@ -95,7 +93,7 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
     let agent_name = req.name.clone();
     thread::Builder::new()
         .name(format!("pty-reader/{agent_name}"))
-        .spawn(move || drain_into_session(&agent_name, pty_for_read, chunk_tx))
+        .spawn(move || drain_into_session(&agent_name, &pty_for_read, &chunk_tx))
         .context("failed to start the PTY reader thread")?;
 
     Ok(AgentEntry {
@@ -112,12 +110,12 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
     })
 }
 
-fn drain_into_session(agent_name: &str, pty: Arc<Pty>, sink: ChunkSender) {
+fn drain_into_session(agent_name: &str, pty: &Arc<Pty>, sink: &ChunkSender) {
     let mut buf = [0u8; 8192];
     loop {
         // `&Pty` impls Read, so the reader thread can read from the
         // shared Arc<Pty> without taking the write lock.
-        match (&*pty).read(&mut buf) {
+        match (&**pty).read(&mut buf) {
             Ok(0) => {
                 debug!("PTY reader for {} reached EOF", agent_name);
                 return;
@@ -139,7 +137,7 @@ fn drain_into_session(agent_name: &str, pty: Arc<Pty>, sink: ChunkSender) {
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64)
+        .map_or(0, |d| d.as_secs().cast_signed())
 }
 
 fn validate_name(name: &str) -> Result<()> {

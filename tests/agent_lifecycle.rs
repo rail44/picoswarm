@@ -1,5 +1,10 @@
 //! Run / Ls / Rm / Attach (error paths only) integration tests.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::let_underscore_must_use)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use
+)]
 
 mod common;
 

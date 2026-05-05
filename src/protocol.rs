@@ -160,6 +160,12 @@ where
 }
 
 /// Write one length-prefixed `postcard`-encoded message to `writer`.
+///
+/// `T: Serialize` and `W: AsyncWriteExt` aren't constrained `Send`, so
+/// the returned future isn't `Send` either. Every caller awaits in the
+/// same task that owns `writer`, so cross-task scheduling never
+/// happens — we accept a non-Send future on purpose.
+#[allow(clippy::future_not_send)]
 pub async fn write_msg<T, W>(writer: &mut W, msg: &T) -> Result<()>
 where
     T: Serialize,

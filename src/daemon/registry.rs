@@ -74,9 +74,18 @@ impl Registry {
         Self::default()
     }
 
+    /// A poisoned registry mutex means another thread panicked while
+    /// holding our own internal state — there's nothing meaningful to
+    /// recover, and continuing risks corrupted bookkeeping. Centralised
+    /// here so the `unwrap` lint is explicitly silenced once.
+    #[allow(clippy::unwrap_used)]
+    fn lock_inner(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap()
+    }
+
     /// Insert a fresh entry. Returns Err if the name is already taken.
     pub fn insert(&self, entry: AgentEntry) -> Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
         if inner.by_name.contains_key(&entry.name) {
             return Err(anyhow!("name already in use: {}", entry.name));
         }
@@ -88,7 +97,7 @@ impl Registry {
 
     /// Return a clone of the named agent's entry, or `None` if missing.
     pub fn lookup(&self, name: &str) -> Option<AgentEntry> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         let id = inner.by_name.get(name)?;
         inner.by_id.get(id).cloned()
     }
@@ -98,7 +107,7 @@ impl Registry {
     /// double-checks via `try_wait` in case the session task hasn't yet
     /// observed the EOF.
     pub fn list(&self) -> Vec<AgentSummary> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         let mut summaries: Vec<AgentSummary> = Vec::with_capacity(inner.by_id.len());
         for entry in inner.by_id.values() {
             if !entry.dead.load(Ordering::Relaxed)
@@ -124,7 +133,7 @@ impl Registry {
         // Drop the registry lock before the (potentially second-long)
         // termination so other registry operations stay responsive.
         let entry = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.lock_inner();
             let id = inner.by_name.remove(name)?;
             inner.by_id.remove(&id)?
         };
@@ -136,10 +145,12 @@ impl Registry {
     /// daemon shutdown so live agent processes do not become orphans of
     /// init when the daemon exits.
     pub fn shutdown_all(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
         for (_, entry) in inner.by_id.drain() {
-            if let Ok(mut child) = entry.child.lock() {
-                let _ = child.kill();
+            if let Ok(mut child) = entry.child.lock()
+                && let Err(e) = child.kill()
+            {
+                debug!("kill on shutdown failed for pid {}: {e}", child.id());
             }
         }
         inner.by_name.clear();
@@ -148,7 +159,7 @@ impl Registry {
     /// Drop every registered agent whose process has exited. Returns the
     /// names that were removed.
     pub fn prune_dead(&self) -> Vec<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
 
         // First sweep: refresh `dead` flags for entries we haven't yet
         // observed exit on.
@@ -183,7 +194,7 @@ impl Registry {
     /// agent doesn't exist or has no PID (e.g. the child handle reports
     /// nothing on this platform).
     pub fn pid_of(&self, name: &str) -> Option<u32> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         let id = inner.by_name.get(name)?;
         let entry = inner.by_id.get(id)?;
         let child = entry.child.lock().ok()?;
@@ -192,9 +203,8 @@ impl Registry {
 }
 
 fn terminate_entry(entry: &AgentEntry, force: bool) {
-    let pid = match entry.child.lock().ok().map(|c| c.id()) {
-        Some(pid) => pid,
-        None => return,
+    let Some(pid) = entry.child.lock().ok().map(|c| c.id()) else {
+        return;
     };
 
     if force {
@@ -202,7 +212,7 @@ fn terminate_entry(entry: &AgentEntry, force: bool) {
         return;
     }
 
-    let nix_pid = Pid::from_raw(pid as i32);
+    let nix_pid = Pid::from_raw(pid.cast_signed());
     if let Err(e) = kill(nix_pid, Signal::SIGTERM) {
         if e == nix::errno::Errno::ESRCH {
             return;
@@ -226,7 +236,9 @@ fn terminate_entry(entry: &AgentEntry, force: bool) {
 }
 
 fn send_sigkill(entry: &AgentEntry) {
-    if let Ok(mut child) = entry.child.lock() {
-        let _ = child.kill();
+    if let Ok(mut child) = entry.child.lock()
+        && let Err(e) = child.kill()
+    {
+        debug!("SIGKILL on pid {} failed: {e}", child.id());
     }
 }

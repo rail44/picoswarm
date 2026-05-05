@@ -52,7 +52,7 @@ fn main() -> anyhow::Result<()> {
         }
         cli::Command::Completions { shell } => {
             init_client_tracing();
-            client_runtime().block_on(client::completions::run(shell))
+            client::completions::run(&shell)
         }
         cli::Command::Send { name, text } => {
             init_client_tracing();
@@ -72,6 +72,10 @@ fn init_client_tracing() {
 }
 
 fn client_runtime() -> tokio::runtime::Runtime {
+    // Runtime build only fails if the OS won't give us threads/timers.
+    // Nothing else in the binary can recover from that, so panic with
+    // a clear message at startup.
+    #[allow(clippy::expect_used)]
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

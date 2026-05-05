@@ -1,5 +1,10 @@
 //! Integration test harness: spawn a fresh `pswarm daemon` in a tempdir,
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::let_underscore_must_use)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use
+)]
 //! hand it back to the test as a `TestDaemon`, and tear it down on drop.
 
 // Each test binary that does `mod common;` gets its own compilation of

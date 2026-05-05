@@ -157,7 +157,10 @@ async fn handle_connection_inner(
             // Acknowledge BEFORE notifying the accept loop so the client
             // sees the Ok even if the listener closes immediately after.
             protocol::write_msg(&mut writer, &DaemonToClient::Ok).await?;
-            let _ = writer.flush().await;
+            // Best-effort flush — if it fails the daemon is going down anyway.
+            if let Err(e) = writer.flush().await {
+                debug!("flush after Shutdown ack failed: {e}");
+            }
             shutdown.notify_one();
         }
         other => {
@@ -209,16 +212,16 @@ async fn handle_oneshot(
             removed: registry.prune_dead(),
         },
 
-        ClientToDaemon::GetCwd { name } => match registry.pid_of(&name) {
-            Some(pid) => {
-                let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok();
-                DaemonToClient::AgentCwd { path }
-            }
-            None => DaemonToClient::Error {
+        ClientToDaemon::GetCwd { name } => registry.pid_of(&name).map_or_else(
+            || DaemonToClient::Error {
                 code: ErrorCode::NotFound,
                 message: format!("no agent named {name} (or it has no live PID)"),
             },
-        },
+            |pid| {
+                let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok();
+                DaemonToClient::AgentCwd { path }
+            },
+        ),
 
         ClientToDaemon::Send { name, payload } => match registry.lookup(&name) {
             Some(entry) => {
@@ -315,6 +318,11 @@ impl Drop for AttachGuard {
     }
 }
 
+// The bidirectional streaming loop is naturally large (subscribe,
+// backlog drain, then a select! over events / client messages). Splitting
+// it across helpers would obscure the message flow more than it would
+// help readability.
+#[allow(clippy::too_many_lines)]
 async fn handle_attach(
     name: String,
     initial_size: TermSize,
@@ -322,19 +330,16 @@ async fn handle_attach(
     reader: &mut ReadHalf<'_>,
     writer: &mut WriteHalf<'_>,
 ) -> Result<()> {
-    let entry = match registry.lookup(&name) {
-        Some(e) => e,
-        None => {
-            protocol::write_msg(
-                writer,
-                &DaemonToClient::Error {
-                    code: ErrorCode::NotFound,
-                    message: format!("no agent named {name}"),
-                },
-            )
-            .await?;
-            return Ok(());
-        }
+    let Some(entry) = registry.lookup(&name) else {
+        protocol::write_msg(
+            writer,
+            &DaemonToClient::Error {
+                code: ErrorCode::NotFound,
+                message: format!("no agent named {name}"),
+            },
+        )
+        .await?;
+        return Ok(());
     };
 
     if entry
@@ -361,22 +366,20 @@ async fn handle_attach(
 
     protocol::write_msg(writer, &DaemonToClient::Ok).await?;
 
-    let SubscribeReply {
+    let Some(SubscribeReply {
         backlog,
         mut events,
-    } = match entry.inbox.subscribe().await {
-        Some(r) => r,
-        None => {
-            protocol::write_msg(
-                writer,
-                &DaemonToClient::Error {
-                    code: ErrorCode::Internal,
-                    message: "session task is gone".into(),
-                },
-            )
-            .await?;
-            return Ok(());
-        }
+    }) = entry.inbox.subscribe().await
+    else {
+        protocol::write_msg(
+            writer,
+            &DaemonToClient::Error {
+                code: ErrorCode::Internal,
+                message: "session task is gone".into(),
+            },
+        )
+        .await?;
+        return Ok(());
     };
 
     if !backlog.is_empty() {
@@ -421,6 +424,10 @@ async fn handle_attach(
                     ClientToDaemon::Stdin(bytes) => {
                         let entry_for_write = entry.clone();
                         let agent_for_log = name.clone();
+                        // Result discarded: panics from the closure are
+                        // already logged inside it via tracing; the outer
+                        // task can't meaningfully recover.
+                        #[allow(clippy::let_underscore_must_use)]
                         let _ = tokio::task::spawn_blocking(move || {
                             let Ok(_guard) = entry_for_write.write_lock.lock() else {
                                 warn!("write lock poisoned for {agent_for_log}, dropping stdin chunk");
@@ -437,7 +444,9 @@ async fn handle_attach(
                     }
                     ClientToDaemon::Detach => {
                         protocol::write_msg(writer, &DaemonToClient::Ok).await?;
-                        let _ = writer.flush().await;
+                        if let Err(e) = writer.flush().await {
+                            debug!("flush after Detach ack failed: {e}");
+                        }
                         break;
                     }
                     other => {

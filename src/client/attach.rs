@@ -58,7 +58,9 @@ pub async fn run(name: String) -> Result<()> {
 
     terminal::enable_raw_mode().map_err(|e| anyhow!("enable_raw_mode: {e}"))?;
     let result = stream_loop(&mut reader, &mut writer).await;
-    let _ = terminal::disable_raw_mode();
+    if let Err(e) = terminal::disable_raw_mode() {
+        eprintln!("[warning: failed to restore terminal mode: {e}]");
+    }
 
     match result? {
         AttachExit::Detached => eprintln!("[detached: {name}]"),
@@ -77,7 +79,7 @@ async fn stream_loop(reader: &mut ReadHalf<'_>, writer: &mut WriteHalf<'_>) -> R
     let stdin_tx = msg_tx.clone();
     let stdin_thread = std::thread::Builder::new()
         .name("pswarm-stdin".into())
-        .spawn(move || stdin_loop(stdin_tx))
+        .spawn(move || stdin_loop(&stdin_tx))
         .map_err(|e| anyhow!("failed to start stdin thread: {e}"))?;
 
     // SIGWINCH -> daemon.
@@ -112,10 +114,9 @@ async fn stream_loop(reader: &mut ReadHalf<'_>, writer: &mut WriteHalf<'_>) -> R
                 match incoming {
                     Ok(DaemonToClient::Stdout(bytes)) => {
                         let mut out = std::io::stdout();
-                        if out.write_all(&bytes).is_err() {
+                        if out.write_all(&bytes).is_err() || out.flush().is_err() {
                             break AttachExit::Closed;
                         }
-                        let _ = out.flush();
                     }
                     Ok(DaemonToClient::SessionEnded { exit_code }) => {
                         break AttachExit::SessionEnded(exit_code);
@@ -139,7 +140,7 @@ async fn stream_loop(reader: &mut ReadHalf<'_>, writer: &mut WriteHalf<'_>) -> R
     Ok(exit)
 }
 
-fn stdin_loop(tx: mpsc::UnboundedSender<ClientToDaemon>) {
+fn stdin_loop(tx: &mpsc::UnboundedSender<ClientToDaemon>) {
     let stdin = std::io::stdin();
     let mut handle = stdin.lock();
     let mut buf = [0u8; 4096];
@@ -148,13 +149,14 @@ fn stdin_loop(tx: mpsc::UnboundedSender<ClientToDaemon>) {
 
     loop {
         let n = match handle.read(&mut buf) {
-            Ok(0) => return,
+            Ok(0) | Err(_) => return,
             Ok(n) => n,
-            Err(_) => return,
         };
 
-        if let Some(file) = debug_log.as_mut() {
-            let _ = log_chunk(file, &buf[..n]);
+        if let Some(file) = debug_log.as_mut()
+            && let Err(e) = log_chunk(file, &buf[..n])
+        {
+            eprintln!("[warning: PSWARM_DEBUG_STDIN write failed: {e}]");
         }
 
         // Combine any leftover bytes from a previous read (held because
@@ -171,6 +173,8 @@ fn stdin_loop(tx: mpsc::UnboundedSender<ClientToDaemon>) {
             {
                 return;
             }
+            // Receiver task is shutting down too; we don't care if this fails.
+            #[allow(clippy::let_underscore_must_use)]
             let _ = tx.send(ClientToDaemon::Detach);
             return;
         }
@@ -243,6 +247,8 @@ fn log_chunk(file: &mut std::fs::File, chunk: &[u8]) -> std::io::Result<()> {
         if i > 0 {
             line.push(' ');
         }
+        // write! into a String can't fail; the helper bound is satisfied.
+        #[allow(clippy::let_underscore_must_use)]
         let _ = write!(line, "{b:02x}");
     }
     line.push('\n');

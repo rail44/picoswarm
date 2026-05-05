@@ -89,6 +89,8 @@ async fn run<F>(
                     let exit_code = on_eof.take().and_then(|f| f());
                     debug!("session task ending, exit_code={:?}", exit_code);
                     for s in &subscribers {
+                        // Receiver may have already detached; we're shutting down anyway.
+                        #[allow(clippy::let_underscore_must_use)]
                         let _ = s.send(SessionEvent::Ended { exit_code });
                     }
                     return;

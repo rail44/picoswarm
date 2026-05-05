@@ -17,8 +17,8 @@ use clap_complete::CompletionCandidate;
 use crate::client::connection;
 use crate::protocol::{self, ClientToDaemon, DaemonToClient};
 
-pub async fn run(shell: String) -> Result<()> {
-    let snippet = match shell.as_str() {
+pub fn run(shell: &str) -> Result<()> {
+    let snippet = match shell {
         "bash" => "source <(COMPLETE=bash pswarm)\n",
         "zsh" => "source <(COMPLETE=zsh pswarm)\n",
         "fish" => "COMPLETE=fish pswarm | source\n",
@@ -41,12 +41,11 @@ pub async fn run(shell: String) -> Result<()> {
 /// an empty candidate list — completion just degrades to "no
 /// suggestions" rather than spewing errors at the user.
 pub fn agent_name_candidates() -> Vec<CompletionCandidate> {
-    let runtime = match tokio::runtime::Builder::new_current_thread()
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-    {
-        Ok(rt) => rt,
-        Err(_) => return Vec::new(),
+    else {
+        return Vec::new();
     };
     runtime.block_on(fetch_agent_names()).unwrap_or_default()
 }
@@ -61,12 +60,11 @@ async fn fetch_agent_names() -> Option<Vec<CompletionCandidate>> {
     protocol::write_msg(&mut writer, &ClientToDaemon::Ls)
         .await
         .ok()?;
-    let agents = match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+    let DaemonToClient::AgentList(agents) = protocol::read_msg::<DaemonToClient, _>(&mut reader)
         .await
         .ok()?
-    {
-        DaemonToClient::AgentList(v) => v,
-        _ => return None,
+    else {
+        return None;
     };
     Some(
         agents

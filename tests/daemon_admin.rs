@@ -1,5 +1,10 @@
 //! Daemon shutdown / restart admin commands.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::let_underscore_must_use)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use
+)]
 
 mod common;
 

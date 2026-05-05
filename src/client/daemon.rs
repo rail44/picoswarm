@@ -35,6 +35,7 @@ pub async fn restart() -> Result<()> {
             protocol::write_msg(&mut writer, &ClientToDaemon::Shutdown).await?;
             // Read the Ok but tolerate any other shape — we're going to
             // restart regardless.
+            #[allow(clippy::let_underscore_must_use)]
             let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
             drop(stream);
 
