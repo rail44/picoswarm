@@ -384,3 +384,64 @@ Two lessons:
 - **A library-choice decision-log entry should record what was rejected and why.** The original entry 5 said "less feature-complete" without enumerating which features mattered. When requirements shifted (we suddenly needed `pre_exec`), there was no way to tell from the log whether the original rejection still held. Future entries should list the specific axes of comparison.
 - **Multi-threaded `PR_SET_PDEATHSIG` is not the footgun the manpage warns about, in our case.** The man page warns the signal fires when the parent *thread* dies, not the parent process — which would be catastrophic with tokio's blocking thread pool. In practice, tokio's worker threads are pooled and stay alive for the runtime's lifetime, so the signal only fires when the daemon process truly exits. Verified via live test: `kill -9 <daemon>` → child SIGTERM'd within ~1s.
 
+---
+
+## 12. Strict clippy lint configuration and its review triggers
+
+### Context
+
+picoswarm's `Cargo.toml` `[lints]` section enables `clippy::pedantic`,
+`clippy::nursery`, and a hand-picked set of `clippy::restriction` lints
+(`unwrap_used`, `expect_used`, `panic`, `let_underscore_must_use`,
+`unwrap_in_result`, `dbg_macro`, `todo`, `unimplemented`,
+`redundant_clone`). Several individually-noisy pedantic/nursery lints
+are explicitly `allow`ed at the workspace level. Test files allow the
+test-only-noisy ones (`unwrap_used` / `expect_used` / `panic`) at the
+file level, and only specific Drop impls / post-action drains carry
+`#[allow(clippy::let_underscore_must_use)]`.
+
+The configuration is deliberately at the strict end of what's
+maintainable for a solo CLI. `just check` runs `cargo clippy
+--all-targets -- -D warnings`, so any warning breaks the build.
+
+### Decision
+
+Keep the strict configuration as the default and accept the friction
+it imposes on prototyping. Each `allow` entry is a known trade-off —
+this section records what would justify changing the trade-off.
+
+### Review triggers
+
+Revisit specific lints when one of these happens:
+
+- **`cast_possible_truncation` / `cast_sign_loss` / `cast_precision_loss`** (currently `allow`): re-enable if any new module starts doing numeric processing beyond PIDs, terminal sizes, or simple seconds-to-i64 conversions. These lints catch real overflow bugs; we silenced them only because every `as i32` for PID conversion was firing.
+- **`significant_drop_tightening`** (currently `allow`): re-enable if a real lock-contention symptom surfaces. The most likely trigger is issue #06 (multi-client read-only attach) or a future feature that holds the registry lock during I/O.
+- **`must_use_candidate`** (currently `allow`): re-enable, or add `#[must_use]` on individual fns, if picoswarm starts exposing a stable library API that external consumers depend on.
+- **`shadow_unrelated` / `shadow_reuse`** (currently not enabled): enable if a shadowing-related bug ever lands. Skipped on day one because the idiomatic `let mut foo = foo.lock()` pattern would fire on every Mutex use.
+- **`pedantic` group as a whole**: a clippy toolchain bump may introduce a new pedantic lint that fires on existing code. When this happens, evaluate the new lint individually — most pedantic additions over the last 18 months have been justified, but a few are bikeshed-bait.
+- **`unwrap_used` / `expect_used` / `panic` in app code**: relax (move to `allow` or scope to specific modules) if the friction during prototyping starts outweighing the regressions caught. The current pattern is per-site `#[allow]` with a comment explaining why; if those allows accumulate above ~15 in app code, the lint has stopped paying for itself and should be relaxed.
+- **Test-side `let_underscore_must_use`** (currently allowed only on Drop impls and post-action drains): if test refactors push that count up significantly, revisit whether the lint is still catching real test-logic regressions.
+
+### Reasoning
+
+The rules above are explicit so future revisits don't have to re-derive
+the original cost/benefit. Each trigger names a concrete observable
+event ("contention symptom", "external consumer", "friction count
+above N") rather than "if it feels wrong" — that's the form least
+prone to drift.
+
+The strict-by-default choice is justified by one shaped-by-experience
+observation: the discussion that motivated this configuration started
+because a `let _ = ...` had been silently swallowing real errors for
+weeks. Catching the next instance of that class of bug is worth the
+ergonomic friction.
+
+### Reflection
+
+Most of the cost was front-loaded into one cleanup session (220 → 0
+warnings in two commits). The ongoing cost is small per change but
+non-zero: every new `.unwrap()` or `let _ =` in app code triggers a
+build failure that needs a deliberate fix or `#[allow]`. The hope is
+that this small recurring tax pays for itself by surfacing exactly
+the pattern that prompted this decision.
+

@@ -1,10 +1,5 @@
 //! Run / Ls / Rm / Attach (error paths only) integration tests.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::let_underscore_must_use
-)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
 
@@ -159,6 +154,8 @@ async fn clean_removes_dead_agents_only() {
     )
     .await
     .expect("write Run");
+    // Drain the response; the assertions later verify the side-effect.
+    #[allow(clippy::let_underscore_must_use)]
     let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
     drop(stream);
 
@@ -260,6 +257,8 @@ async fn send_to_running_agent_returns_ok() {
     )
     .await
     .expect("write Run");
+    // Drain the response; the assertions later verify the side-effect.
+    #[allow(clippy::let_underscore_must_use)]
     let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
     drop(stream);
 
@@ -338,6 +337,8 @@ async fn run_propagates_request_env_to_agent() {
     )
     .await
     .expect("write Run");
+    // Drain the response; the assertions later verify the side-effect.
+    #[allow(clippy::let_underscore_must_use)]
     let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
     drop(stream);
 
@@ -379,6 +380,8 @@ async fn pswarm_daemon_env_cannot_be_overridden_by_request() {
     )
     .await
     .expect("write Run");
+    // Drain the response; the assertions later verify the side-effect.
+    #[allow(clippy::let_underscore_must_use)]
     let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
     drop(stream);
 

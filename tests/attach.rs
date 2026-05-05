@@ -1,10 +1,5 @@
 //! Headless attach tests using a PTY-driven client harness.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::let_underscore_must_use
-)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
 

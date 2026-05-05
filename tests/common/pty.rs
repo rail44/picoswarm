@@ -1,10 +1,5 @@
 //! PTY-driven harness for testing `pswarm attach`.
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::let_underscore_must_use
-)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //!
 //! Spawns `pswarm attach <name>` inside a fresh PTY, drains the master
 //! into an output buffer on a background OS thread, and exposes a tiny
@@ -109,8 +104,12 @@ impl PtyClient {
 
 impl Drop for PtyClient {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Best-effort teardown; the test is exiting either way.
+        #[allow(clippy::let_underscore_must_use)]
+        {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
