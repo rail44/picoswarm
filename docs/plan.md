@@ -62,10 +62,11 @@ Triggered by gaps that show up in real use, not by this list. Likely candidates,
 
 These need to be settled before or during MVP implementation. Listed in the order that they likely matter.
 
-1. **PTY size and resize when no client is attached.** Defaults are captured in `docs/protocol.md` (initial 80x24, client reports its size on attach). Still open: when the only attached client disconnects, does the daemon keep the last reported size on the PTY, or reset to 80x24? Working assumption: keep last size; revisit if a use case shows it matters.
-2. **Config file.** TOML at `$XDG_CONFIG_HOME/picoswarm/config.toml`. Likely not needed for MVP — defaults plus CLI flags should be enough. Add only when a setting needs to persist between invocations.
+1. **Config file.** TOML at `$XDG_CONFIG_HOME/picoswarm/config.toml`. Likely not needed for MVP — defaults plus CLI flags should be enough. Add only when a setting needs to persist between invocations.
 
 ### Resolved (captured here for visibility)
+
+- PTY size when no client is attached: **keep last**. The PTY starts at 80×24 (the only initial value the spawning client provides via `RunRequest.initial_size`). When a client attaches it resizes to the client's terminal size. When the client detaches the daemon does not reset the PTY — the size persists until the next attach overrides it. Rationale: a session manager should preserve state across the gap between detach and reattach, matching tmux's behaviour and the user's mental model. Resetting to 80×24 on detach gains nothing concrete (the next attach will resize anyway) and risks one frame of garbled output for any TUI agent that's mid-redraw when the client disappears. (Original Open Decision dropped 2026-05-05.)
 
 - Detach trigger: **`Ctrl-\`** (single key). Recognised in two encoding forms — the raw C0 byte `0x1c` (no keyboard protocol), and the CSI-u sequence `\e[92;5u` (kitty kbd protocol level 1, "disambiguate escape codes"). The matcher carries state across stdin reads so the CSI-u form may straddle reads. Higher kbd-protocol levels (event types `:T`, associated text `;NN`) are not currently parsed; in real use Claude Code only enables level 1, so this works today, but if Claude graduates the matcher needs to grow. The earlier `Ctrl-Q` + `q` two-key trigger was tried (to work around the level-1 ambiguity issue we have since solved) and then dropped — single key + multi-encoding match is sufficient and ergonomically better.
 - Stdin debugging: setting `PSWARM_DEBUG_STDIN=/path/to/file` makes the attach client append every raw stdin chunk it sees (as space-separated hex bytes) to that file. Use this to find out what bytes a particular keypress actually produces in the user's terminal when detach is misbehaving.
@@ -115,7 +116,7 @@ In order:
 
 1. ~~Initialize the Cargo project.~~ **Done**.
 2. ~~Decide the client-daemon protocol shape and capture it in `docs/protocol.md`.~~ **Done**.
-3. ~~Settle the remaining open design decisions.~~ **Done** (registry persistence, daemonization, env policy, log path, name validation, repo layout — see "Resolved" above). The only thing still open is the no-client PTY size policy, which can be decided when the resize path is wired.
+3. ~~Settle the remaining open design decisions.~~ **Done** (registry persistence, daemonization, env policy, log path, name validation, repo layout, no-client PTY size policy — see "Resolved" above).
 4. ~~Implement the daemon: socket listener, session table, PTY spawn via `portable-pty`, ring buffer.~~ **Done** for `run` / `ls` / `rm` / `doctor` (Hello + Ping/Pong + Run/Ls/Rm). Attach handling still pending.
 5. Implement the client `attach` loop: connect to the daemon, forward stdin/stdout, handle the detach key (`Ctrl-\`). Adds the `crossterm` dependency for raw mode and `SIGWINCH`. Daemon-side: per-agent session task that fans out PTY output to the ring buffer and any attached client.
 6. Switch `pswarm run` to default-attach (matching the `docker run` mental model that motivated the verb) and add `-d` / `--detach` for the current spawn-only behavior.

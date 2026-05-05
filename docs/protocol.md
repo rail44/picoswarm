@@ -211,7 +211,8 @@ D → C : Ok
 | Per-session ring buffer | 64 KB, in-memory only |
 | Default agent command | `claude` |
 | Detach key | `Ctrl-\` (byte `0x1c`) |
-| Default PTY size when no client attached | 80 × 24 |
+| Initial PTY size at spawn | 80 × 24 (until the spawning client supplies its size on first attach) |
+| PTY size after client detach | last size from the most recent attach, kept until the next attach resizes it |
 | Auto-start retry window | 2 seconds, exponential backoff |
 | Graceful shutdown window after `SIGTERM` | 1 second before `SIGKILL` |
 
