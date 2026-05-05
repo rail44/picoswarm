@@ -9,7 +9,7 @@
 //!
 //! This module also exposes [`agent_name_candidates`], the dynamic
 //! completer attached to subcommand args that take an agent name
-//! (`attach`, `rm`, `cwd`, `send`).
+//! (`attach`, `rm`, `cwd`, `send`, `view`).
 
 use anyhow::{Result, bail};
 use clap_complete::CompletionCandidate;

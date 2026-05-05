@@ -87,6 +87,14 @@ pub enum Command {
         /// Text to send. If omitted, read from stdin.
         text: Option<String>,
     },
+    /// Print the agent's recent PTY output (one-shot snapshot of the
+    /// ring buffer) without attaching. Read-only — no resize side
+    /// effect on the agent.
+    View {
+        /// Name of the agent to view.
+        #[arg(add = ArgValueCandidates::new(agent_name_candidates))]
+        name: String,
+    },
     /// Manage the picoswarm daemon lifecycle.
     Daemon {
         #[command(subcommand)]

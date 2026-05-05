@@ -402,6 +402,91 @@ async fn pswarm_daemon_env_cannot_be_overridden_by_request() {
 }
 
 #[tokio::test]
+async fn view_returns_recent_output() {
+    let daemon = TestDaemon::start();
+
+    // Spawn an agent that prints a known marker, then sleeps.
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Run(RunRequest {
+            name: "viewable".to_string(),
+            cmd: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf 'PSWARM-VIEW-MARKER\\n'; sleep 5".to_string(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            initial_size: TermSize { rows: 24, cols: 80 },
+        }),
+    )
+    .await
+    .expect("write Run");
+    #[allow(clippy::let_underscore_must_use)]
+    let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
+    drop(stream);
+
+    // Wait for the marker to land in the ring buffer.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let mut stream = daemon.connect().await;
+        let (mut reader, mut writer) = stream.split();
+        protocol::write_msg(
+            &mut writer,
+            &ClientToDaemon::View {
+                name: "viewable".to_string(),
+            },
+        )
+        .await
+        .expect("write View");
+        let bytes = match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+            .await
+            .expect("read View response")
+        {
+            DaemonToClient::Stdout(b) => b,
+            other => panic!("expected Stdout, got {other:?}"),
+        };
+        if bytes
+            .windows(b"PSWARM-VIEW-MARKER".len())
+            .any(|w| w == b"PSWARM-VIEW-MARKER")
+        {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "marker not found in view output after 2s: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn view_unknown_returns_not_found() {
+    let daemon = TestDaemon::start();
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::View {
+            name: "nope".to_string(),
+        },
+    )
+    .await
+    .expect("write View");
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read response")
+    {
+        DaemonToClient::Error { code, .. } => assert_eq!(code, ErrorCode::NotFound),
+        other => panic!("expected NotFound, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn attach_unknown_returns_not_found() {
     let daemon = TestDaemon::start();
 

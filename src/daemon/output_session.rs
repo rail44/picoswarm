@@ -28,6 +28,7 @@ pub struct SubscribeReply {
 
 enum SessionRequest {
     Subscribe(oneshot::Sender<SubscribeReply>),
+    Snapshot(oneshot::Sender<Vec<u8>>),
 }
 
 #[derive(Clone)]
@@ -39,6 +40,14 @@ impl SessionInbox {
     pub async fn subscribe(&self) -> Option<SubscribeReply> {
         let (tx, rx) = oneshot::channel();
         self.requests.send(SessionRequest::Subscribe(tx)).ok()?;
+        rx.await.ok()
+    }
+
+    /// Return a copy of the current ring buffer contents without
+    /// subscribing to live events. Used by `pswarm view`.
+    pub async fn snapshot(&self) -> Option<Vec<u8>> {
+        let (tx, rx) = oneshot::channel();
+        self.requests.send(SessionRequest::Snapshot(tx)).ok()?;
         rx.await.ok()
     }
 }
@@ -103,6 +112,12 @@ async fn run<F>(
                     if reply.send(SubscribeReply { backlog, events: event_rx }).is_ok() {
                         subscribers.push(event_tx);
                     }
+                }
+                Some(SessionRequest::Snapshot(reply)) => {
+                    let backlog: Vec<u8> = ring.iter().copied().collect();
+                    // Caller may have given up before receiving; that's fine.
+                    #[allow(clippy::let_underscore_must_use)]
+                    let _ = reply.send(backlog);
                 }
                 None => {
                     // No more inboxes — the AgentEntry was dropped, but the

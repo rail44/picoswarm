@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Hard cap on a single frame's payload size, to keep a malformed length
 /// prefix from triggering an arbitrarily large allocation.
@@ -95,6 +95,13 @@ pub enum ClientToDaemon {
     Send {
         name: String,
         payload: Vec<u8>,
+    },
+    /// One-shot read of the named agent's recent PTY output (the ring
+    /// buffer's current contents). Read-only, no side effects on the
+    /// agent. Daemon responds with a single `Stdout(backlog)` followed
+    /// by closing the connection.
+    View {
+        name: String,
     },
 }
 

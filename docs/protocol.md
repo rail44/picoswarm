@@ -1,6 +1,6 @@
 # Client-Daemon Protocol
 
-This document specifies the wire protocol between the picoswarm CLI client and the picoswarm daemon. Protocol version: **5**.
+This document specifies the wire protocol between the picoswarm CLI client and the picoswarm daemon. Protocol version: **6**.
 
 ## Transport
 
@@ -78,6 +78,7 @@ pub enum ClientToDaemon {
     Clean,                          // sweep dead agents from the registry
     GetCwd { name: String },        // read /proc/<pid>/cwd for a running agent
     Send { name: String, payload: Vec<u8> }, // write bytes to an agent's PTY without attaching
+    View { name: String },          // one-shot read of the agent's recent PTY output
 }
 
 pub enum DaemonToClient {
@@ -181,6 +182,16 @@ D → C : AgentCwd { path: Some(PathBuf) }   // success
 
 The daemon reads `/proc/<pid>/cwd` (Linux) and returns the resolved symlink. On non-Linux platforms it returns `AgentCwd { path: None }`.
 
+### `pswarm view <NAME>`
+
+```
+C → D : View { name }
+D → C : Stdout(backlog)              |  Error { NotFound | Internal }
+< close >
+```
+
+The daemon copies the named agent's ring buffer (recent PTY output) and returns it as a single `Stdout` frame, then closes the connection. Read-only — no resize side effect on the agent and no subscription to live events. A dead agent still returns its surviving ring buffer until the registry entry is removed.
+
 ### `pswarm send <NAME> [TEXT]`
 
 ```
@@ -228,6 +239,5 @@ D → C : Ok
 
 ## Out of scope (for this protocol version)
 
-- Streaming logs without attaching (`peek` / `logs` subcommands).
 - Multi-client concurrent attach.
 - Authenticated multi-user access (the socket relies on filesystem permissions only).

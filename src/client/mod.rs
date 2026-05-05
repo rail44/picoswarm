@@ -12,3 +12,4 @@ pub mod ls;
 pub mod rm;
 pub mod run;
 pub mod send;
+pub mod view;

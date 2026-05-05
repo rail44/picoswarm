@@ -223,6 +223,20 @@ async fn handle_oneshot(
             },
         ),
 
+        ClientToDaemon::View { name } => match registry.lookup(&name) {
+            Some(entry) => entry.inbox.snapshot().await.map_or_else(
+                || DaemonToClient::Error {
+                    code: ErrorCode::Internal,
+                    message: format!("session task for {name} is gone"),
+                },
+                DaemonToClient::Stdout,
+            ),
+            None => DaemonToClient::Error {
+                code: ErrorCode::NotFound,
+                message: format!("no agent named {name}"),
+            },
+        },
+
         ClientToDaemon::Send { name, payload } => match registry.lookup(&name) {
             Some(entry) => {
                 // Write on the blocking pool; the PTY writer is std::io,
