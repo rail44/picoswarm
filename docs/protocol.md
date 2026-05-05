@@ -1,6 +1,6 @@
 # Client-Daemon Protocol
 
-This document specifies the wire protocol between the picoswarm CLI client and the picoswarm daemon. Protocol version: **4**.
+This document specifies the wire protocol between the picoswarm CLI client and the picoswarm daemon. Protocol version: **5**.
 
 ## Transport
 
@@ -77,6 +77,7 @@ pub enum ClientToDaemon {
     Status,                         // daemon stats (used by `pswarm doctor`)
     Clean,                          // sweep dead agents from the registry
     GetCwd { name: String },        // read /proc/<pid>/cwd for a running agent
+    Send { name: String, payload: Vec<u8> }, // write bytes to an agent's PTY without attaching
 }
 
 pub enum DaemonToClient {
@@ -180,6 +181,16 @@ D → C : AgentCwd { path: Some(PathBuf) }   // success
 
 The daemon reads `/proc/<pid>/cwd` (Linux) and returns the resolved symlink. On non-Linux platforms it returns `AgentCwd { path: None }`.
 
+### `pswarm send <NAME> [TEXT]`
+
+```
+C → D : Send { name, payload }
+D → C : Ok                          |  Error { NotFound | Internal }
+< close >
+```
+
+The daemon does not interpret `payload`; it forwards the bytes verbatim to the writer side of the agent's PTY. The CLI ensures `payload` ends with a newline (so Claude Code submits the message) unless the input already ends with one. Sending while another client is attached is allowed; the bytes interleave with the attached client's stdin. There is no built-in send-to-self guard at this protocol version — the caller is responsible for not invoking the CLI on its own agent.
+
 ### `pswarm daemon stop` / `restart`
 
 ```
@@ -195,7 +206,7 @@ D → C : Ok
 
 | Item | Value |
 |---|---|
-| Protocol version | `4` |
+| Protocol version | `5` |
 | Stdin/Stdout chunk cap | 16 KB per frame |
 | Per-session ring buffer | 64 KB, in-memory only |
 | Default agent command | `claude` |
@@ -208,7 +219,7 @@ D → C : Ok
 
 | Situation | Behavior |
 |---|---|
-| Client disconnects mid-attach without sending `Detach` | Daemon treats it as a detach: PTY stays alive, agent status set to `Idle`. |
+| Client disconnects mid-attach without sending `Detach` | Daemon treats it as a detach: PTY stays alive. The agent's status remains `Running` since the underlying process is still up; reporting "no client attached" is not modelled in `AgentStatus` after the v4 cleanup. |
 | Daemon dies (panic, SIGKILL) | The registry is in-memory only, so it dies with the daemon. Live agent processes are children of the daemon and normally die with it; on a hard kill they may briefly survive as orphans of init (see issues/21-orphan-prevention.md). On next `pswarm` invocation a fresh daemon starts with an empty registry. |
 | Process inside an agent exits | Daemon emits `SessionEnded { exit_code }` to any attached client, marks the agent `Dead`. Registry row remains until `pswarm rm` removes it. |
 | Two clients try to attach to the same agent | Second `Attach` returns `Error { AlreadyAttached }`. Multi-client read-only attach is a future feature, not MVP. |
@@ -217,6 +228,5 @@ D → C : Ok
 ## Out of scope (for this protocol version)
 
 - Streaming logs without attaching (`peek` / `logs` subcommands).
-- Sending text to an unattached agent (`send`).
 - Multi-client concurrent attach.
 - Authenticated multi-user access (the socket relies on filesystem permissions only).

@@ -11,3 +11,4 @@ pub mod doctor;
 pub mod ls;
 pub mod rm;
 pub mod run;
+pub mod send;

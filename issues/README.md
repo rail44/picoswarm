@@ -10,7 +10,7 @@
 
 - [01 PaneHost (kitty adapter) の実装](01-pane-host-kitty-adapter.md)
 - [02 エージェント自己呼び出し (env 注入と send-to-self ガード)](02-agent-self-invocation.md) — 延期 (`self` を要する後続機能の着手時に再検討)
-- [03 `pswarm send` サブコマンド](03-send-subcommand.md)
+- ~~03 `pswarm send` サブコマンド~~ — 解決済み (テキスト + stdin + 自動改行、protocol bump 4→5)
 - ~~04 `docs/protocol.md` の最新化~~ — 解決済み (commit にて protocol.md を v4 に追従)
 
 ### 中 (機能ギャップ / 既存機能の穴)

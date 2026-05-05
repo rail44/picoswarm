@@ -68,6 +68,18 @@ pub enum Command {
         /// Target shell. Currently only `fish` is supported.
         shell: String,
     },
+    /// Write text to a running agent's PTY without attaching.
+    ///
+    /// If TEXT is omitted, reads from stdin instead. Always ends the
+    /// payload with a newline (so Claude Code submits it), unless the
+    /// input already ends with one. Allowed while a client is attached;
+    /// the bytes interleave with the attached client's typing.
+    Send {
+        /// Name of the target agent.
+        name: String,
+        /// Text to send. If omitted, read from stdin.
+        text: Option<String>,
+    },
     /// Manage the picoswarm daemon lifecycle.
     Daemon {
         #[command(subcommand)]

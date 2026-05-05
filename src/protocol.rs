@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Hard cap on a single frame's payload size, to keep a malformed length
 /// prefix from triggering an arbitrarily large allocation.
@@ -86,6 +86,15 @@ pub enum ClientToDaemon {
     /// agent's process (read from `/proc/<pid>/cwd`).
     GetCwd {
         name: String,
+    },
+    /// Write `payload` to the named agent's PTY without attaching. The
+    /// daemon does not interpret the bytes — they are forwarded verbatim
+    /// to the writer side of the agent's PTY. Sending while a client is
+    /// attached is allowed; the bytes will interleave with the attached
+    /// client's stdin.
+    Send {
+        name: String,
+        payload: Vec<u8>,
     },
 }
 

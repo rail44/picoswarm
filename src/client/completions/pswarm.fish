@@ -15,6 +15,7 @@ complete -c pswarm -n __fish_use_subcommand -f -a attach      -d 'Attach to a ru
 complete -c pswarm -n __fish_use_subcommand -f -a rm          -d 'Remove an agent'
 complete -c pswarm -n __fish_use_subcommand -f -a clean       -d 'Remove dead agents'
 complete -c pswarm -n __fish_use_subcommand -f -a cwd         -d "Print agent's current working directory"
+complete -c pswarm -n __fish_use_subcommand -f -a send        -d 'Send text to a running agent without attaching'
 complete -c pswarm -n __fish_use_subcommand -f -a doctor      -d 'Daemon and environment diagnostics'
 complete -c pswarm -n __fish_use_subcommand -f -a daemon      -d 'Daemon admin (start / stop / restart)'
 complete -c pswarm -n __fish_use_subcommand -f -a completions -d 'Print shell completion script'
@@ -34,7 +35,7 @@ complete -c pswarm -n '__fish_seen_subcommand_from rm' -s f -l force \
     -d 'Skip graceful SIGTERM and kill immediately'
 
 # Dynamic agent-name completion for subcommands that take a name.
-complete -c pswarm -n '__fish_seen_subcommand_from attach rm cwd' -f -a '(__pswarm_agent_names)'
+complete -c pswarm -n '__fish_seen_subcommand_from attach rm cwd send' -f -a '(__pswarm_agent_names)'
 
 # `daemon` subsubcommands.
 complete -c pswarm -n '__fish_seen_subcommand_from daemon' -f -a 'start stop restart' \

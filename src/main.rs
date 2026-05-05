@@ -48,6 +48,10 @@ fn main() -> anyhow::Result<()> {
             init_client_tracing();
             client_runtime().block_on(client::completions::run(shell))
         }
+        cli::Command::Send { name, text } => {
+            init_client_tracing();
+            client_runtime().block_on(client::send::run(name, text))
+        }
     }
 }
 

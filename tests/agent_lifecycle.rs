@@ -235,6 +235,73 @@ async fn cwd_unknown_returns_not_found() {
 }
 
 #[tokio::test]
+async fn send_to_running_agent_returns_ok() {
+    let daemon = TestDaemon::start();
+
+    // /bin/cat sits on its stdin forever; the daemon's writer can push
+    // bytes into it without the process exiting on us.
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Run(RunRequest {
+            name: "echoer".to_string(),
+            cmd: vec!["/bin/cat".to_string()],
+            cwd: None,
+            env: Vec::new(),
+            initial_size: TermSize { rows: 24, cols: 80 },
+        }),
+    )
+    .await
+    .expect("write Run");
+    let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
+    drop(stream);
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Send {
+            name: "echoer".to_string(),
+            payload: b"hello\n".to_vec(),
+        },
+    )
+    .await
+    .expect("write Send");
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read Send response")
+    {
+        DaemonToClient::Ok => {}
+        other => panic!("expected Ok, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn send_unknown_returns_not_found() {
+    let daemon = TestDaemon::start();
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Send {
+            name: "nope".to_string(),
+            payload: b"hi\n".to_vec(),
+        },
+    )
+    .await
+    .expect("write Send");
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read response")
+    {
+        DaemonToClient::Error { code, .. } => assert_eq!(code, ErrorCode::NotFound),
+        other => panic!("expected NotFound, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn attach_unknown_returns_not_found() {
     let daemon = TestDaemon::start();
 

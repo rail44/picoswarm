@@ -219,6 +219,38 @@ async fn handle_oneshot(
             },
         },
 
+        ClientToDaemon::Send { name, payload } => match registry.lookup(&name) {
+            Some(entry) => {
+                // Write on the blocking pool; the PTY writer is std::io,
+                // and we don't want to stall the async runtime.
+                let result = tokio::task::spawn_blocking(move || {
+                    let mut writer = entry
+                        .writer
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("writer mutex poisoned"))?;
+                    writer.write_all(&payload)?;
+                    writer.flush()?;
+                    Ok::<(), anyhow::Error>(())
+                })
+                .await;
+                match result {
+                    Ok(Ok(())) => DaemonToClient::Ok,
+                    Ok(Err(e)) => DaemonToClient::Error {
+                        code: ErrorCode::Internal,
+                        message: format!("write to {name} failed: {e}"),
+                    },
+                    Err(e) => DaemonToClient::Error {
+                        code: ErrorCode::Internal,
+                        message: format!("send task panicked: {e}"),
+                    },
+                }
+            }
+            None => DaemonToClient::Error {
+                code: ErrorCode::NotFound,
+                message: format!("no agent named {name}"),
+            },
+        },
+
         ClientToDaemon::Hello { .. } => DaemonToClient::Error {
             code: ErrorCode::Internal,
             message: "Hello already exchanged".into(),
