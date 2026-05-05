@@ -1,44 +1,74 @@
-# エージェント自己呼び出し (env 注入と send-to-self ガード)
+# Agent self-invocation (env injection + send-to-self guard)
 
-- **Priority:** 高
-- **Status:** 延期 — `self` 概念が必要な機能 (#16 tag/link、#03 の send-to-self ガード等) が動き始めるタイミングまで保留。
+- **Priority:** High
+- **Status:** Deferred — held until a feature that needs the `self`
+  concept lands (#16 tag/link, send-to-self guard for #03, etc.).
 
 ### Description
 
-- **Summary:** `CLAUDE.md` "Decisions that must not drift" には「Agents must be able to invoke the CLI on themselves (single binary, callable from a subshell)」と明記されている。これを成立させるには (a) 起動した PTY 内にエージェントの id を注入する、(b) `pswarm <verb> self` の `self` 解決と send-to-self ガードを置く、の 2 ピースが要る。`docs/plan.md` の "PTY env policy" 決定事項にも env 注入が予告されているが、`src/daemon/session.rs:55` では `PSWARM_DAEMON=1` だけしか入れていない。
-- **Impact:** 「CLI ファースト」を picoswarm の差別化として確定した (`docs/decision-log.md` 4) 以上、エージェントが自分自身を pswarm から見つけられないと差別化が完成しない。ただし **#03 (send) は self 識別なしでも成立** (`pswarm send <他人の名前>` で十分) なので、`self` キーワードや send-to-self ガードを実装するタイミングまで延期可能。
+- **Summary:** `CLAUDE.md` "Decisions that must not drift" states "Agents
+  must be able to invoke the CLI on themselves (single binary, callable
+  from a subshell)." Two pieces are required: (a) inject the agent's id
+  into the spawned PTY's environment, (b) resolve `pswarm <verb> self`
+  to that id and refuse send-to-self loops. `docs/plan.md`'s "PTY env
+  policy" already promised the env injection, but `src/daemon/session.rs`
+  currently sets only `PSWARM_DAEMON=1`.
+- **Impact:** "CLI-first" was nailed down as picoswarm's differentiator
+  (`docs/decision-log.md` item 4). That story isn't complete until an
+  agent can find itself via the same CLI. However, **#03 (send) does not
+  depend on self-identification** — `pswarm send <other-name>` works
+  without it — so the work can wait until `self` keywords or
+  send-to-self guards are actually in scope.
 
-### 識別方式の比較 (検討済み)
+### Identification approaches considered
 
-| 方式 | 仕組み | Pros | Cons |
+| Approach | Mechanism | Pros | Cons |
 |---|---|---|---|
-| **A. env 注入** | spawn 時に `PSWARM_AGENT_ID` / `_NAME` を inject | 5 行で済む / Unix idiom (TMUX, KITTY_LISTEN_ON 等) / subshell・nohup・setsid 越えに耐える | 子プロセス全部に漏れる / agent 内で unset/spoof 可能 |
-| **B. getpeercred + ppid 遡り** | daemon 側で接続元 pid を取得し `/proc/<pid>/status` の PPid を遡って registry の agent pid と一致させる | env 汚染ゼロ / spoof 不可 | 30〜50 行 / `nohup` で session 切れた場合のロバスト性微妙 / pid 再利用レース (実害ほぼ無) |
-| C. cwd 一致 | 接続元の cwd と agent の cwd を突合 | 簡単 | 同一 worktree で複数 agent の場合 ambiguous → 却下 |
-| D. controlling tty | 接続元の tty から agent の PTY を逆引き | 自然 | agent の child process も同じ tty を持つので結局 env と同じ間接性 / 実装は重い |
-| E. cwd にマーカファイル | `.pswarm-agent-id` を撒く | env 不使用 | worktree が汚れる → 却下 |
-| F. socket fd 渡し | spawn 時に open socket fd を継承 | spoof 不可 | subshell に継承されない (= env より弱い) → 却下 |
+| **A. env injection** | inject `PSWARM_AGENT_ID` / `_NAME` at spawn | ~5 lines / standard Unix idiom (TMUX, KITTY_LISTEN_ON, …) / survives subshell, nohup, setsid | leaks into all child processes / can be unset/spoofed inside the agent |
+| **B. getpeercred + ppid walk** | daemon reads connecting peer's pid, walks `/proc/<pid>/status` PPid up to a registered agent pid | zero env pollution / unspoofable | 30–50 lines / fragile under `nohup` (session detach) / pid reuse race (essentially zero impact in practice) |
+| C. cwd match | match the connecting client's cwd against the agent's cwd | simple | ambiguous when multiple agents share a worktree → rejected |
+| D. controlling tty | reverse-look-up from peer's tty to the agent's PTY | natural | agent's own children share the same tty, so the indirection is the same as env and harder to implement |
+| E. marker file in cwd | drop `.pswarm-agent-id` in the worktree | no env use | pollutes the user's worktree → rejected |
+| F. socket fd inheritance | hand an open socket fd to the spawned agent | unspoofable | subshells don't inherit fds (= weaker than env) → rejected |
 
-現実的に残るのは **A (env)** と **B (peercred + ppid 遡り)**。脅威モデルが「単一ユーザのローカルマシン」である以上、spoof 耐性は弱い要件。env で十分というのが現時点の見立て。
+The realistic candidates are **A (env)** and **B (peercred + ppid walk)**.
+Given the threat model is "single user on a local machine," spoof
+resistance is a weak requirement. Env is enough for now.
 
 ### Proposed Solutions
 
-- **(着手時の第一候補) 方式 A: env 注入だけ先行** (小, 半日): `session.rs` で `PSWARM_AGENT_ID` / `PSWARM_AGENT_NAME` を `cmd.env` に追加。`pswarm` 内に `agent_id_from_env()` ヘルパを置き、各 client subcommand が必要に応じて拾えるようにする。ガードは send 実装時に追加。トレードオフ: 自己呼び出しの安全性は別 issue 任せ。
-- env + 専用 `self` キーワード (中, 1 日): 上記に加え `pswarm <verb> self` を「env の id を解決」として書く。attach / send / cwd 等で対応。トレードオフ: subcommand 横断の規約が増える。
-- env + global self ガード middleware (中, 1〜2 日): connection layer で「`PSWARM_AGENT_ID` と target が同じなら拒否」を中央で当てる。トレードオフ: いまの thin な client 実装に layer を一枚足す必要。
-- 方式 B (peercred + ppid 遡り) (中〜大, 2〜3 日): env 汚染を避けたい場合の代替。脅威モデル的に正当化しづらいので、env で困った時の検討対象として保留。
+- **(first pick when this is taken up) Approach A: env injection only**
+  (small, half-day): add `PSWARM_AGENT_ID` / `PSWARM_AGENT_NAME` to
+  `cmd.env` in `session.rs`. Provide an `agent_id_from_env()` helper
+  inside `pswarm` so client subcommands can pick it up when needed. The
+  send-to-self guard is added when send actually needs it. Tradeoff:
+  the safety story is delegated.
+- env + dedicated `self` keyword (medium, 1 day): on top of A, make
+  `pswarm <verb> self` resolve to the env id for attach / send / cwd /
+  etc. Tradeoff: introduces a cross-subcommand convention.
+- env + global self-guard middleware (medium, 1–2 days): in the
+  connection layer, refuse any operation where `PSWARM_AGENT_ID`
+  matches the target. Tradeoff: adds a layer to the otherwise thin
+  client implementation.
+- Approach B (peercred + ppid walk) (medium–large, 2–3 days):
+  alternative for when env pollution becomes unacceptable. Hard to
+  justify under the current threat model — held as a fallback for
+  when env runs into trouble.
 
-### 着手トリガー
+### Triggers to revisit
 
-下記いずれかが立ち上がったタイミングで再検討:
+Reconsider when one of these actually lands:
 
-- #16 (tag/link) で `--parent self` が必要になった時
-- #03 (send) で send-to-self ガードを入れたくなった時 (= 無限ループ事故が見えてきた時)
-- ライフサイクルログ (#05) に「誰が誰を操作したか」を残したくなった時
+- #16 (tag/link) needs `--parent self`.
+- #03 (send) gains a send-to-self guard (= a loop accident becomes
+  visible).
+- A lifecycle-log-style attribution ("which agent invoked which") is
+  desired.
 
-### Knowledgement
+### References
 
-- `CLAUDE.md` "Decisions that must not drift" の self-invocation 項
-- `docs/plan.md` Resolved "PTY env policy" (env 注入は予告済み)
-- `src/daemon/session.rs:51-58` 現在の env 注入箇所
-- 関連 issue: #03 (send は単独で成立), #16 (tag/link), #05 (lifecycle log)
+- `CLAUDE.md` "Decisions that must not drift" — self-invocation bullet
+- `docs/plan.md` Resolved "PTY env policy" — env injection is promised
+- `src/daemon/session.rs:51-58` — current env-injection site
+- Related issues: #03 (send works standalone), #16 (tag/link), and
+  the dropped #05 (lifecycle log)

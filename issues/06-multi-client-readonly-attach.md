@@ -1,26 +1,57 @@
-# 複数クライアントの同時 attach (read-only observers)
+# Concurrent client attach (read-only observers)
 
-- **Priority:** 中
-- **Status:** 延期 — streaming 用途は #02 (self-invocation) が動いた時点で同時に価値が立つ。それまで peek (#08) で 80% カバー。
+- **Priority:** Medium
+- **Status:** Deferred — the streaming use case only becomes valuable
+  once #02 (self-invocation) lands; until then, `pswarm view` (#08)
+  covers ~80% of the practical need.
 
-### 着手トリガー
+### Triggers to revisit
 
-下記いずれかが立ち上がったタイミングで再検討:
+Reconsider when one of these lands:
 
-- #02 (self-invocation) が動いて agent 間の参照関係が表現できた時 (= "agent が別 agent をライブで観察" の前提が揃う)
-- peek (#08) を loop で叩いて代替している運用が辛くなった時
-- #18 (TUI dashboard) を作る時、複数同時 subscribe を必要とする backing として
+- #02 (self-invocation) is implemented (= the "agent watches another
+  agent live" scenario gains its prerequisite).
+- `pswarm view` (#08) starts being polled in a loop as a substitute
+  and the friction becomes obvious.
+- #18 (TUI dashboard) is built and needs multiple concurrent
+  subscribers as backing.
 
 ### Description
 
-- **Summary:** 現状 attach はエージェントごとに 1 client 排他 (`AlreadyAttached` エラー)。`docs/plan.md` Out-of-MVP の "Multiple-client concurrent attach (read-only observers)" として明示的に保留されている。`pswarm send` (#03) や別エージェントからの観察ユースケースが効くようになると価値が出る。
-- **Impact:** 「人間が attach 中に別の agent (or 別端末) から覗きたい」「CI からヘルスチェック」が現状不可能。`docs/decision-log.md` 4 で picoswarm の差別化として強調された「agent が他 agent を観察」が動かない。
-- **Proposed Solutions:**
-  1. **read-only secondary attach** (中, 2〜3 日): protocol に `AttachReadOnly` を追加し、複数 subscribe を許容。`SessionInbox::subscribe` は既に複数 subscriber を受け付けられるので、daemon 側は `attached` フラグを「writer の排他」だけに格下げ。stdin/Resize は writer 側のみ受理。トレードオフ: 「writer になれるのは誰」のロジックが要る (先着順で十分か、`--steal` か)。
-  2. **read-write も含めた一斉許可** (中〜大, 3〜5 日): 全 attach が write 可能。同時 stdin 衝突は PTY が解決 (≒ 競合) する。トレードオフ: 安全に見えるが、debug が難しい。
-  3. **`pswarm peek` だけ別ルートで実装** (小, 1 日): attach せずに ring buffer の現在内容を 1 回出力するだけ。これは issue #08 と同義になるので、複数 attach のフルセットは将来へ送る。トレードオフ: 「観察」は満たせるが「介入の橋渡し」 (read+write) は別問題のまま。
-- **Knowledgement:**
-  - `docs/plan.md` Out-of-MVP の該当項
-  - `src/daemon/server.rs:295-309` 現在の排他ロジック (`compare_exchange` で 1 attach に制限)
-  - `src/daemon/output_session.rs:75` `subscribers: Vec<...>` — 複数前提の構造はすでにある
-  - 関連 issue: #03, #08, #14
+- **Summary:** Today only one client can be attached to a given agent
+  at a time (`AlreadyAttached` error). `docs/plan.md` lists "Multiple-
+  client concurrent attach (read-only observers)" under Out-of-MVP.
+  The feature gains real value once `pswarm send` (#03) and
+  agent-watching-agent scenarios are in regular use.
+- **Impact:** "Human attached + another terminal/agent peeks" and
+  "CI healthcheck" are currently impossible. The
+  agent-observes-another-agent capability that
+  `docs/decision-log.md` item 4 calls out as picoswarm's
+  differentiator can't actually be exercised.
+
+### Proposed Solutions
+
+1. **Read-only secondary attach** (medium, 2–3 days): add
+   `AttachReadOnly` to the protocol and allow multiple subscribers.
+   `SessionInbox::subscribe` already supports many subscribers, so
+   the daemon work is mostly demoting the `attached` flag to
+   "writer exclusion only" and refusing stdin/Resize from non-writer
+   attaches. Tradeoff: the "who is the writer" logic needs deciding
+   (first-come-first-served vs `--steal`).
+2. **All attaches are read-write** (medium–large, 3–5 days): every
+   attach can write; concurrent stdin is resolved by the PTY
+   (= interleaved). Tradeoff: looks simple but is hard to debug.
+3. **Implement `pswarm peek` only as a separate path** (small, 1 day):
+   one-shot dump of the ring buffer with no streaming. This is
+   essentially issue #08, and the full multi-attach work is then
+   deferred. Tradeoff: covers "observation" but leaves "intervention
+   bridging" (read+write) unsolved.
+
+### References
+
+- `docs/plan.md` Out-of-MVP, the relevant entry
+- `src/daemon/server.rs` — current single-attach exclusion via
+  `compare_exchange` on the `attached` flag
+- `src/daemon/output_session.rs` — `subscribers: Vec<...>` is
+  already designed for multiple subscribers
+- Related issues: #03, #08

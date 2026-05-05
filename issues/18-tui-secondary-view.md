@@ -1,26 +1,48 @@
-# TUI ビュー (`pswarm tui`) — 補完ビューとして
+# TUI view (`pswarm tui`) — as a complementary view
 
-- **Priority:** 低
-- **Status:** 延期 — CLI が十分に効いている間は着手しない。
+- **Priority:** Low
+- **Status:** Deferred — not picked up while the CLI is sufficient.
 
-### 着手トリガー
+### Triggers to revisit
 
-下記いずれかが立ち上がったタイミングで再検討:
+Reconsider when one of these lands:
 
-- agent 数が常時 10+ になり `pswarm ls` の出力が辛くなった時 → option 1 (ratatui ダッシュボード)
-- 「ls を 1 Hz で再表示したい」のような軽い watch 需要が出た時 → option 2 (`pswarm watch` だけ先行)
+- Agent count is regularly 10+ and `pswarm ls` output gets hard to
+  scan → consider option 1 (ratatui dashboard).
+- A lightweight "refresh `ls` at ~1 Hz" need surfaces → consider
+  option 2 (`pswarm watch` standalone).
 
-`CLAUDE.md` の "Decisions that must not drift" に「TUI を primary にしない」がある以上、TUI は常に CLI の補完。現状 CLI で困っていない以上、着手の判断は実需要次第。
+`CLAUDE.md` "Decisions that must not drift" makes "TUI is never the
+primary entry point" non-negotiable, so a TUI is always the
+complementary view. As long as the CLI is enough, the decision to
+build one is driven by actual demand, not aspiration.
 
 ### Description
 
-- **Summary:** `CLAUDE.md` "Decisions that must not drift" で「primary UX は CLI のまま、TUI は complementary view として後で足すのは可」とされている。`docs/plan.md` Next 候補にも「CLI list view が不十分になったら」着手と書かれている。
-- **Impact:** CLI で済んでいる現状はすぐの困りごとは小さい。10+ agent を同時に並べて状態監視する段階で価値が出る。
-- **Proposed Solutions:**
-  1. **`ratatui` の最小ダッシュボード** (中〜大, 3〜5 日): `pswarm ls --watch` 相当 + 各 agent の最後の数行 preview。read-only attach (#06) と組み合わせると tail 機能になる。トレードオフ: 依存大、UX デザイン工数。
-  2. **`pswarm watch` だけ実装** (小〜中, 1〜2 日): TUI までいかず、`pswarm ls` を 1 Hz で reprint する watch モード。トレードオフ: 最終形ではないが、当面の痒み解消には十分。
-  3. **やらない** (なし): CLI で十分という決定を維持。トレードオフ: 将来不要であれば最適。
-- **Knowledgement:**
-  - `CLAUDE.md` "Decisions that must not drift" — TUI を primary にしないこと
-  - `docs/decision-log.md` 4 (ccmanager 評価) — TUI-first を明確に拒否した経緯
-  - 関連 issue: #06, #08
+- **Summary:** `CLAUDE.md` "Decisions that must not drift" allows a
+  TUI as a complementary view added later, just not as the primary
+  UX. `docs/plan.md` lists the same: build it once the CLI list
+  view stops being sufficient.
+- **Impact:** Today the CLI is enough; immediate friction is zero.
+  Value emerges when 10+ agents need to be monitored in parallel.
+
+### Proposed Solutions
+
+1. **Minimal `ratatui` dashboard** (medium–large, 3–5 days):
+   `pswarm ls --watch`-equivalent plus a few-line preview of each
+   agent's recent output. Combined with read-only attach (#06) it
+   doubles as a tail view. Tradeoff: heavy dependency, real UX
+   design effort.
+2. **Just `pswarm watch`** (small–medium, 1–2 days): no TUI, just
+   redraw `pswarm ls` at ~1 Hz. Tradeoff: not the final shape but
+   probably enough to scratch the immediate itch.
+3. **Skip** (none): keep the "CLI is sufficient" stance. Tradeoff:
+   optimal if a TUI never proves necessary.
+
+### References
+
+- `CLAUDE.md` "Decisions that must not drift" — TUI must not be
+  the primary entry point
+- `docs/decision-log.md` item 4 (ccmanager evaluation) — the
+  explicit rejection of TUI-first
+- Related: #06, #08

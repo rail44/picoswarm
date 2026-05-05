@@ -66,7 +66,7 @@ Not currently used (would only be added if a concrete need arises):
 
 ### Language of artifacts
 
-Commit messages, documentation (README, files under `docs/`), and in-code comments are written in English.
+Commit messages, documentation (README, files under `docs/` and `issues/`), and in-code comments are written in English.
 
 ---
 
