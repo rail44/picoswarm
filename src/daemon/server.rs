@@ -179,13 +179,24 @@ async fn handle_oneshot(
 
         ClientToDaemon::Ls => DaemonToClient::AgentList(registry.list()),
 
-        ClientToDaemon::Rm { name, force } => match registry.remove(&name, force) {
-            Some(_) => DaemonToClient::Ok,
-            None => DaemonToClient::Error {
-                code: ErrorCode::NotFound,
-                message: format!("no agent named {name}"),
-            },
-        },
+        ClientToDaemon::Rm { name, force } => {
+            // remove() can block for up to GRACEFUL_TERMINATE_GRACE
+            // (~1s) waiting for SIGTERM to take effect; run it on the
+            // blocking pool so the async runtime stays responsive.
+            let reg = registry.clone();
+            let n = name.clone();
+            match tokio::task::spawn_blocking(move || reg.remove(&n, force)).await {
+                Ok(Some(_)) => DaemonToClient::Ok,
+                Ok(None) => DaemonToClient::Error {
+                    code: ErrorCode::NotFound,
+                    message: format!("no agent named {name}"),
+                },
+                Err(e) => DaemonToClient::Error {
+                    code: ErrorCode::Internal,
+                    message: format!("rm task panicked: {e}"),
+                },
+            }
+        }
 
         ClientToDaemon::Status => DaemonToClient::Status {
             uptime_seconds: started_at.elapsed().as_secs(),

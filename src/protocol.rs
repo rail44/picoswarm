@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Hard cap on a single frame's payload size, to keep a malformed length
 /// prefix from triggering an arbitrarily large allocation.
@@ -34,9 +34,7 @@ pub struct RunRequest {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AgentStatus {
     Running,
-    Idle,
     Dead,
-    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

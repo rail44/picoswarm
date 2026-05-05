@@ -11,7 +11,7 @@
 - [01 PaneHost (kitty adapter) の実装](01-pane-host-kitty-adapter.md)
 - [02 エージェント自己呼び出し (env 注入と send-to-self ガード)](02-agent-self-invocation.md)
 - [03 `pswarm send` サブコマンド](03-send-subcommand.md)
-- [04 `docs/protocol.md` の最新化](04-protocol-doc-drift.md)
+- ~~04 `docs/protocol.md` の最新化~~ — 解決済み (commit にて protocol.md を v4 に追従)
 
 ### 中 (機能ギャップ / 既存機能の穴)
 
@@ -19,16 +19,16 @@
 - [06 複数クライアントの同時 attach (read-only observers)](06-multi-client-readonly-attach.md)
 - [07 Reattach 時の画面復元 (VT parser 導入)](07-screen-restoration-vt-parser.md)
 - [08 attach せずに直近出力を見る (`pswarm logs` / `peek`)](08-logs-peek-subcommand.md)
-- [09 `pswarm rm` の段階的終了 (SIGTERM → SIGKILL)](09-graceful-rm-sigterm.md)
+- ~~09 `pswarm rm` の段階的終了 (SIGTERM → SIGKILL)~~ — 解決済み (graceful 1s grace 実装、`--force` で SIGTERM スキップ)
 - [10 `pswarm ls` の人間向け出力に cwd / pid / uptime 等を追加](10-ls-enrichment.md)
 - [11 `pswarm run` での env 注入フラグ (`-e KEY=VAL`)](11-run-env-flag.md)
-- [12 `AgentStatus::Idle` / `Unknown` を実装するか削除する](12-agent-status-idle-cleanup.md)
+- ~~12 `AgentStatus::Idle` / `Unknown` を実装するか削除する~~ — 解決済み (削除、protocol bump 3→4)
 - [13 Bash / zsh の補完スクリプト](13-bash-zsh-completions.md)
 - [14 全 client detach 時の PTY サイズ方針](14-pty-size-no-client-policy.md)
 - [15 設定ファイル (`config.toml`) の導入](15-config-file-toml.md)
 - [16 tag / link / parent-child リレーション](16-tag-link-relationships.md)
 - [17 Daemon ログのローテーション](17-daemon-log-rotation.md)
-- [21 Daemon ハードクラッシュ時の orphan agent 対策](21-orphan-prevention.md)
+- [21 Daemon ハードクラッシュ時の orphan agent 対策](21-orphan-prevention.md) — 調査済み (portable-pty 経由の `PR_SET_PDEATHSIG` は不可)
 - [22 Daemon 再起動時の attach 体験改善](22-attach-on-daemon-restart-ux.md)
 
 ### 低 (要件が固まってから)

@@ -1,6 +1,6 @@
 # Client-Daemon Protocol
 
-This document specifies the wire protocol between the picoswarm CLI client and the picoswarm daemon. Protocol version: **1**.
+This document specifies the wire protocol between the picoswarm CLI client and the picoswarm daemon. Protocol version: **4**.
 
 ## Transport
 
@@ -25,7 +25,7 @@ Immediately after a TCP-style `accept`, both sides exchange a `Hello`:
 1. The client sends `ClientToDaemon::Hello { protocol_version }` first.
 2. The daemon responds with `DaemonToClient::Hello { protocol_version }` if the version matches, or `DaemonToClient::Error { code: ProtocolMismatch, message }` and closes if not.
 
-Both sides report version `1` for now. The version is bumped only when the wire format becomes backwards-incompatible.
+The version is bumped any time the wire format changes incompatibly (new variants count: removing or reordering a variant changes its postcard discriminant, so any addition that's not a strict append is breaking — and `postcard` deserialization rejects unknown discriminants regardless). On mismatch, the daemon returns `Error { ProtocolMismatch }` and closes; the client surfaces a message suggesting `pswarm daemon restart` to reload the binary.
 
 ## Messages
 
@@ -50,7 +50,7 @@ pub struct AgentSummary {
     pub created_at: i64,          // unix seconds
 }
 
-pub enum AgentStatus { Running, Idle, Dead, Unknown }
+pub enum AgentStatus { Running, Dead }
 
 pub enum ErrorCode {
     NotFound,
@@ -73,6 +73,10 @@ pub enum ClientToDaemon {
     Stdin(Vec<u8>),
     Rm { name: String, force: bool },
     Ping,
+    Shutdown,                       // ask the daemon to exit gracefully
+    Status,                         // daemon stats (used by `pswarm doctor`)
+    Clean,                          // sweep dead agents from the registry
+    GetCwd { name: String },        // read /proc/<pid>/cwd for a running agent
 }
 
 pub enum DaemonToClient {
@@ -84,6 +88,13 @@ pub enum DaemonToClient {
     Stdout(Vec<u8>),
     SessionEnded { exit_code: Option<i32> },
     Pong,
+    Status {                        // response to ClientToDaemon::Status
+        uptime_seconds: u64,
+        agent_count: u32,
+        version: String,
+    },
+    Cleaned { removed: Vec<String> },  // response to ClientToDaemon::Clean
+    AgentCwd { path: Option<PathBuf> }, // response to ClientToDaemon::GetCwd
 }
 ```
 
@@ -140,18 +151,51 @@ The backlog is sent as ordinary `Stdout` frames; the client cannot tell where ba
 ### `pswarm doctor`
 
 ```
-C → D : Ping
-D → C : Pong
+C → D : Status
+D → C : Status { uptime_seconds, agent_count, version }
 < close >
 ```
 
-Plus client-side local checks: socket existence, daemon process listing, kitty `KITTY_LISTEN_ON` presence, etc.
+Plus client-side local checks printed before the daemon round-trip: socket path, daemon log path, kitty `KITTY_LISTEN_ON` presence, etc. (`Ping`/`Pong` is still defined for liveness probing but `doctor` now uses `Status` to surface uptime / agent count / daemon binary version.)
+
+### `pswarm clean`
+
+```
+C → D : Clean
+D → C : Cleaned { removed: [name, ...] }
+< close >
+```
+
+The daemon refreshes each entry's `dead` flag via `try_wait`, then drops every entry observed dead. `removed` lists the names that were swept (empty if there was nothing to clean).
+
+### `pswarm cwd <NAME>`
+
+```
+C → D : GetCwd { name }
+D → C : AgentCwd { path: Some(PathBuf) }   // success
+      | AgentCwd { path: None }            // pid known but cwd unreadable / unsupported platform
+      | Error { NotFound }                  // no such agent / agent has no live pid
+< close >
+```
+
+The daemon reads `/proc/<pid>/cwd` (Linux) and returns the resolved symlink. On non-Linux platforms it returns `AgentCwd { path: None }`.
+
+### `pswarm daemon stop` / `restart`
+
+```
+C → D : Shutdown
+D → C : Ok
+< close >
+[daemon stops accepting new connections, kills every live agent, removes the socket, and exits]
+```
+
+`restart` is `stop` followed by an explicit `pswarm daemon start` re-spawn from the client side.
 
 ## Defaults and constants
 
 | Item | Value |
 |---|---|
-| Protocol version | `1` |
+| Protocol version | `4` |
 | Stdin/Stdout chunk cap | 16 KB per frame |
 | Per-session ring buffer | 64 KB, in-memory only |
 | Default agent command | `claude` |
@@ -165,7 +209,7 @@ Plus client-side local checks: socket existence, daemon process listing, kitty `
 | Situation | Behavior |
 |---|---|
 | Client disconnects mid-attach without sending `Detach` | Daemon treats it as a detach: PTY stays alive, agent status set to `Idle`. |
-| Daemon dies (panic, SIGKILL) | All live agent processes die with it (children of the daemon). On next `pswarm` invocation a fresh daemon starts; on startup the daemon reconciles the registry, marking previously-`Running` agents as `Dead`. |
+| Daemon dies (panic, SIGKILL) | The registry is in-memory only, so it dies with the daemon. Live agent processes are children of the daemon and normally die with it; on a hard kill they may briefly survive as orphans of init (see issues/21-orphan-prevention.md). On next `pswarm` invocation a fresh daemon starts with an empty registry. |
 | Process inside an agent exits | Daemon emits `SessionEnded { exit_code }` to any attached client, marks the agent `Dead`. Registry row remains until `pswarm rm` removes it. |
 | Two clients try to attach to the same agent | Second `Attach` returns `Error { AlreadyAttached }`. Multi-client read-only attach is a future feature, not MVP. |
 | Protocol version mismatch | Daemon returns `Error { ProtocolMismatch }` and closes. The client surfaces an error suggesting the daemon needs to be restarted to match the upgraded binary. A dedicated `pswarm daemon-restart` subcommand may be added later. |

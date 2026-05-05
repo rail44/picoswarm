@@ -7,16 +7,26 @@
 //! die with it, so reviving registry rows would describe nothing real.
 
 use anyhow::{Result, anyhow};
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use portable_pty::{Child, MasterPty};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::daemon::output_session::SessionInbox;
 use crate::protocol::{AgentStatus, AgentSummary};
+
+/// Time to wait between SIGTERM and SIGKILL when terminating a child
+/// gracefully. Matches the value documented in `docs/protocol.md`.
+const GRACEFUL_TERMINATE_GRACE: Duration = Duration::from_secs(1);
+const GRACEFUL_TERMINATE_POLL: Duration = Duration::from_millis(100);
 
 /// Cloneable handle to a single agent. All fields are `Arc`/`Clone` so the
 /// attach handler can hold a snapshot independently of the registry lock.
@@ -104,19 +114,23 @@ impl Registry {
         summaries
     }
 
-    /// Remove the agent with `name`, killing the child if alive. Returns
-    /// the removed entry on success, or None if not found.
+    /// Remove the agent with `name`, terminating the child if alive.
+    /// Returns the removed entry on success, or None if not found.
     ///
-    /// `force` is currently a no-op; portable-pty's `kill` already sends
-    /// SIGKILL on Unix. Once a graceful SIGTERM-then-SIGKILL path lands,
-    /// `force = true` will skip the SIGTERM step.
-    pub fn remove(&self, name: &str, _force: bool) -> Option<AgentEntry> {
-        let mut inner = self.inner.lock().unwrap();
-        let id = inner.by_name.remove(name)?;
-        let entry = inner.by_id.remove(&id)?;
-        if let Ok(mut child) = entry.child.lock() {
-            let _ = child.kill();
-        }
+    /// With `force = false` (default), sends SIGTERM, polls for up to
+    /// `GRACEFUL_TERMINATE_GRACE`, then falls back to SIGKILL if the
+    /// child is still running. With `force = true`, skips the SIGTERM
+    /// step and goes straight to SIGKILL. Blocks for up to the grace
+    /// period; callers in async contexts should wrap in `spawn_blocking`.
+    pub fn remove(&self, name: &str, force: bool) -> Option<AgentEntry> {
+        // Drop the registry lock before the (potentially second-long)
+        // termination so other registry operations stay responsive.
+        let entry = {
+            let mut inner = self.inner.lock().unwrap();
+            let id = inner.by_name.remove(name)?;
+            inner.by_id.remove(&id)?
+        };
+        terminate_entry(&entry, force);
         Some(entry)
     }
 
@@ -176,5 +190,60 @@ impl Registry {
         let entry = inner.by_id.get(id)?;
         let child = entry.child.lock().ok()?;
         child.process_id()
+    }
+}
+
+/// Terminate `entry`'s child process. Without `force`, attempts a
+/// graceful SIGTERM first and falls back to SIGKILL after
+/// `GRACEFUL_TERMINATE_GRACE`. With `force`, sends SIGKILL immediately.
+fn terminate_entry(entry: &AgentEntry, force: bool) {
+    let pid = match entry.child.lock().ok().and_then(|c| c.process_id()) {
+        Some(pid) => pid,
+        None => {
+            // No live PID — may already have exited. Best-effort kill()
+            // still, in case portable-pty has internal state to release.
+            if let Ok(mut child) = entry.child.lock() {
+                let _ = child.kill();
+            }
+            return;
+        }
+    };
+
+    if force {
+        send_sigkill(entry, pid);
+        return;
+    }
+
+    let nix_pid = Pid::from_raw(pid as i32);
+    if let Err(e) = kill(nix_pid, Signal::SIGTERM) {
+        // ESRCH means the child is already gone; nothing more to do.
+        if e != nix::errno::Errno::ESRCH {
+            warn!("SIGTERM to pid {pid} failed: {e}; falling back to SIGKILL");
+        } else {
+            return;
+        }
+    }
+
+    let deadline = Instant::now() + GRACEFUL_TERMINATE_GRACE;
+    while Instant::now() < deadline {
+        thread::sleep(GRACEFUL_TERMINATE_POLL);
+        if let Ok(mut child) = entry.child.lock()
+            && let Ok(Some(_)) = child.try_wait()
+        {
+            debug!("pid {pid} exited gracefully after SIGTERM");
+            return;
+        }
+    }
+
+    debug!("pid {pid} did not exit within grace period; sending SIGKILL");
+    send_sigkill(entry, pid);
+}
+
+fn send_sigkill(entry: &AgentEntry, pid: u32) {
+    if let Ok(mut child) = entry.child.lock() {
+        let _ = child.kill();
+    } else {
+        // Fallback: skip portable-pty bookkeeping and signal directly.
+        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
     }
 }
