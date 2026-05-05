@@ -1,6 +1,17 @@
 # 設定ファイル (`config.toml`) の導入
 
 - **Priority:** 中
+- **Status:** 延期 — config を実際に要求する後続 issue が立ち上がるまで保留。
+
+### 着手トリガー
+
+下記いずれかが立ち上がったタイミングで再検討:
+
+- #01 (PaneHost / kitty adapter) で adapter 選択や per-agent デフォルトを config で持ちたくなった時
+- #20 (MCP server) で MCP 接続情報を持つ必要が出た時
+- 任意の機能で「CLI フラグでも env でも収まらない設定」が出た時
+
+「空のスキーマを先に作る」より「最初に具体的な需要と一緒に設計する」方がスキーマを誤りにくいと判断。config 層自体は起動時 1 回読みで侵襲的ではないので、defer のコストは低い。
 
 ### Description
 

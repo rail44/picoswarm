@@ -25,7 +25,7 @@
 - ~~12 `AgentStatus::Idle` / `Unknown` を実装するか削除する~~ — 解決済み (削除、protocol bump 3→4)
 - ~~13 Bash / zsh の補完スクリプト~~ — 解決済み (clap_complete `unstable-dynamic` 採用、bash/zsh/fish/elvish/powershell すべてで動的補完)
 - ~~14 全 client detach 時の PTY サイズ方針~~ — 解決済み (keep last を採用、docs に明記)
-- [15 設定ファイル (`config.toml`) の導入](15-config-file-toml.md)
+- [15 設定ファイル (`config.toml`) の導入](15-config-file-toml.md) — 延期 (config を要求する後続 issue の着手時に再検討)
 - [16 tag / link / parent-child リレーション](16-tag-link-relationships.md)
 - [17 Daemon ログのローテーション](17-daemon-log-rotation.md)
 - [21 Daemon ハードクラッシュ時の orphan agent 対策](21-orphan-prevention.md) — 調査済み (portable-pty 経由の `PR_SET_PDEATHSIG` は不可)
