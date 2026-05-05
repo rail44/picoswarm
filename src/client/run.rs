@@ -22,11 +22,17 @@ pub async fn run(name: String, detach: bool, cmd: Vec<String>) -> Result<()> {
     // worktrees itself.
     let cwd = std::env::current_dir().ok();
 
+    // Propagate the client's env so `pswarm run` behaves like the
+    // user's shell extended with persistence (tmux model). The daemon
+    // applies this on top of its own env and then re-sets
+    // PSWARM_DAEMON=1 last so the client cannot override it.
+    let env: Vec<(String, String)> = std::env::vars().collect();
+
     let request = RunRequest {
         name: name.clone(),
         cmd,
         cwd,
-        env: Vec::new(),
+        env,
         initial_size,
     };
 

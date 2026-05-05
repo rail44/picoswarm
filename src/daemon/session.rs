@@ -47,15 +47,21 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
         cmd.cwd(cwd);
     }
 
-    // Inherit the daemon's env, then layer on PSWARM_DAEMON=1, then any
-    // explicit overrides from the client.
+    // Build the agent's env in three layers, last write wins:
+    //   1. daemon process env — baseline (PATH, HOME, etc. that lived
+    //      with the daemon since its first auto-spawn).
+    //   2. request env — propagated from the connecting client. This is
+    //      what makes `pswarm run` feel like running a process in the
+    //      user's current shell.
+    //   3. PSWARM_DAEMON=1 — daemon-controlled invariant, set last so
+    //      the client cannot override it (intentionally or otherwise).
     for (k, v) in std::env::vars() {
         cmd.env(k, v);
     }
-    cmd.env("PSWARM_DAEMON", "1");
     for (k, v) in &req.env {
         cmd.env(k, v);
     }
+    cmd.env("PSWARM_DAEMON", "1");
 
     let child = pair
         .slave

@@ -302,6 +302,93 @@ async fn send_unknown_returns_not_found() {
 }
 
 #[tokio::test]
+async fn run_propagates_request_env_to_agent() {
+    // Verifies the daemon-side half of "client env reaches the agent":
+    // any (k, v) in RunRequest.env should land in the spawned process's
+    // environment. The client::run::run() side that populates env from
+    // std::env::vars() is verified separately by inspection.
+    let daemon = TestDaemon::start();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outpath = dir.path().join("envdump");
+
+    let key = "PSWARM_INTEGRATION_TEST_KEY";
+    let value = "propagated-value";
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Run(RunRequest {
+            name: "envprop".to_string(),
+            cmd: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!("printenv {} > {} ; sleep 5", key, outpath.display()),
+            ],
+            cwd: None,
+            env: vec![(key.to_string(), value.to_string())],
+            initial_size: TermSize { rows: 24, cols: 80 },
+        }),
+    )
+    .await
+    .expect("write Run");
+    let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
+    drop(stream);
+
+    for _ in 0..40 {
+        if outpath.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let dump = std::fs::read_to_string(&outpath).expect("read envdump");
+    assert_eq!(dump.trim(), value, "expected {key}={value} in dump");
+}
+
+#[tokio::test]
+async fn pswarm_daemon_env_cannot_be_overridden_by_request() {
+    // The daemon must always set PSWARM_DAEMON=1 last, so the client
+    // cannot accidentally (or intentionally) flip it to 0 / unset.
+    let daemon = TestDaemon::start();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outpath = dir.path().join("envdump");
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Run(RunRequest {
+            name: "daemonenv".to_string(),
+            cmd: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!("printenv PSWARM_DAEMON > {} ; sleep 5", outpath.display()),
+            ],
+            cwd: None,
+            env: vec![("PSWARM_DAEMON".to_string(), "0".to_string())],
+            initial_size: TermSize { rows: 24, cols: 80 },
+        }),
+    )
+    .await
+    .expect("write Run");
+    let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
+    drop(stream);
+
+    for _ in 0..40 {
+        if outpath.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let dump = std::fs::read_to_string(&outpath).expect("read envdump");
+    assert_eq!(
+        dump.trim(),
+        "1",
+        "PSWARM_DAEMON should remain '1' even when request tries to override"
+    );
+}
+
+#[tokio::test]
 async fn attach_unknown_returns_not_found() {
     let daemon = TestDaemon::start();
 
