@@ -30,6 +30,8 @@ fmt-check:
 # All pre-commit checks: clippy + fmt-check + test.
 check: clippy fmt-check test
 
-# Tail the daemon log file.
+# Tail the daemon's rotating tracing log + crash log.
+# Glob expands at invocation; if rotation creates a new daily file
+# during the tail, re-run to pick it up.
 log:
-    tail -F "${XDG_STATE_HOME:-$HOME/.local/state}/picoswarm/daemon.log"
+    tail -F "${XDG_STATE_HOME:-$HOME/.local/state}/picoswarm/"daemon.*.log
