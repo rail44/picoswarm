@@ -54,7 +54,7 @@ impl<'a> From<&'a AgentSummary> for AgentView<'a> {
     }
 }
 
-fn status_str(s: AgentStatus) -> &'static str {
+const fn status_str(s: AgentStatus) -> &'static str {
     match s {
         AgentStatus::Running => "running",
         AgentStatus::Dead => "dead",

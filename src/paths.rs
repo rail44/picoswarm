@@ -13,8 +13,7 @@ pub fn socket_path() -> Result<PathBuf> {
     let dirs = base_dirs()?;
     let base = dirs
         .runtime_dir()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs.home_dir().join(".local").join("run"));
+        .map_or_else(|| dirs.home_dir().join(".local").join("run"), PathBuf::from);
     Ok(base.join("picoswarm").join("sock"))
 }
 
@@ -23,9 +22,10 @@ pub fn socket_path() -> Result<PathBuf> {
 /// the daemonized process.
 pub fn log_dir() -> Result<PathBuf> {
     let dirs = base_dirs()?;
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs.home_dir().join(".local").join("state"));
+    let base = std::env::var_os("XDG_STATE_HOME").map_or_else(
+        || dirs.home_dir().join(".local").join("state"),
+        PathBuf::from,
+    );
     Ok(base.join("picoswarm"))
 }
 

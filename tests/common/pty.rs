@@ -1,4 +1,5 @@
 //! PTY-driven harness for testing `pswarm attach`.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::let_underscore_must_use)]
 //!
 //! Spawns `pswarm attach <name>` inside a fresh PTY, drains the master
 //! into an output buffer on a background OS thread, and exposes a tiny

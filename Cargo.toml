@@ -11,11 +11,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
-# Pinned: `unstable-dynamic` is the only API channel for runtime
-# completion (issue #13). Pin to a known-good version and re-test
-# on intentional bumps; the API has been stable since 4.5.31 (2024-10)
-# but the `unstable-` prefix means breaking changes can land in any
-# minor release.
 clap_complete = { version = "=4.6.3", features = ["unstable-dynamic"] }
 crossterm = "0.29.0"
 daemonize = "0.5.0"
@@ -34,3 +29,35 @@ uuid = { version = "1.23.1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# Pedantic/nursery lints that are mostly noise for a solo CLI.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+similar_names = "allow"
+single_match_else = "allow"
+doc_markdown = "allow"
+too_long_first_doc_paragraph = "allow"
+ignored_unit_patterns = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+
+# Restriction lints we opt into for app code. tests/*.rs override
+# unwrap_used / expect_used / panic at the file level.
+let_underscore_must_use = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unwrap_in_result = "warn"

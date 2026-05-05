@@ -94,7 +94,7 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
     let pty_for_read = Arc::clone(&pty);
     let agent_name = req.name.clone();
     thread::Builder::new()
-        .name(format!("pty-reader/{}", agent_name))
+        .name(format!("pty-reader/{agent_name}"))
         .spawn(move || drain_into_session(&agent_name, pty_for_read, chunk_tx))
         .context("failed to start the PTY reader thread")?;
 
@@ -139,22 +139,20 @@ fn drain_into_session(agent_name: &str, pty: Arc<Pty>, sink: ChunkSender) {
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 fn validate_name(name: &str) -> Result<()> {
     let len = name.chars().count();
     if !(1..=64).contains(&len) {
-        return Err(anyhow!("agent name must be 1-64 characters: {}", name));
+        return Err(anyhow!("agent name must be 1-64 characters: {name}"));
     }
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     {
         return Err(anyhow!(
-            "agent name may only contain a-z, A-Z, 0-9, '.', '_', '-': {}",
-            name
+            "agent name may only contain a-z, A-Z, 0-9, '.', '_', '-': {name}"
         ));
     }
     Ok(())

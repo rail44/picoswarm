@@ -1,4 +1,5 @@
 //! Run / Ls / Rm / Attach (error paths only) integration tests.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::let_underscore_must_use)]
 
 mod common;
 
@@ -338,7 +339,7 @@ async fn run_propagates_request_env_to_agent() {
     // Wait for non-empty content; `outpath.exists()` alone races with
     // the shell's `>` redirect, which truncates before `printenv` writes.
     for _ in 0..40 {
-        if outpath.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        if outpath.metadata().is_ok_and(|m| m.len() > 0) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -379,7 +380,7 @@ async fn pswarm_daemon_env_cannot_be_overridden_by_request() {
     // Wait for non-empty content; `outpath.exists()` alone races with
     // the shell's `>` redirect, which truncates before `printenv` writes.
     for _ in 0..40 {
-        if outpath.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        if outpath.metadata().is_ok_and(|m| m.len() > 0) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

@@ -243,7 +243,7 @@ fn log_chunk(file: &mut std::fs::File, chunk: &[u8]) -> std::io::Result<()> {
         if i > 0 {
             line.push(' ');
         }
-        let _ = write!(line, "{:02x}", b);
+        let _ = write!(line, "{b:02x}");
     }
     line.push('\n');
     file.write_all(line.as_bytes())
