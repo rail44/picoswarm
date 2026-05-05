@@ -23,7 +23,7 @@
 - ~~10 `pswarm ls` の人間向け出力 enrichment~~ — 不要として却下
 - ~~11 `pswarm run` での env 注入~~ — 解決済み (client env を自動継承する方式に再設計、`-e` フラグは不採用)
 - ~~12 `AgentStatus::Idle` / `Unknown` を実装するか削除する~~ — 解決済み (削除、protocol bump 3→4)
-- [13 Bash / zsh の補完スクリプト](13-bash-zsh-completions.md)
+- ~~13 Bash / zsh の補完スクリプト~~ — 解決済み (clap_complete `unstable-dynamic` 採用、bash/zsh/fish/elvish/powershell すべてで動的補完)
 - [14 全 client detach 時の PTY サイズ方針](14-pty-size-no-client-policy.md)
 - [15 設定ファイル (`config.toml`) の導入](15-config-file-toml.md)
 - [16 tag / link / parent-child リレーション](16-tag-link-relationships.md)

@@ -1,4 +1,7 @@
 use clap::{Parser, Subcommand};
+use clap_complete::engine::ArgValueCandidates;
+
+use crate::client::completions::agent_name_candidates;
 
 #[derive(Parser)]
 #[command(
@@ -43,11 +46,13 @@ pub enum Command {
     /// Attach to an existing agent in the current terminal.
     Attach {
         /// Name of the agent to attach to.
+        #[arg(add = ArgValueCandidates::new(agent_name_candidates))]
         name: String,
     },
     /// Remove an agent, terminating its process if it is still running.
     Rm {
         /// Name of the agent to remove.
+        #[arg(add = ArgValueCandidates::new(agent_name_candidates))]
         name: String,
         /// Skip the graceful SIGTERM and kill the process immediately.
         #[arg(long, short)]
@@ -61,6 +66,7 @@ pub enum Command {
     /// shell wrappers, e.g. `cd (pswarm cwd feat-x)` in fish.
     Cwd {
         /// Name of the agent to query.
+        #[arg(add = ArgValueCandidates::new(agent_name_candidates))]
         name: String,
     },
     /// Generate shell completion scripts.
@@ -76,6 +82,7 @@ pub enum Command {
     /// the bytes interleave with the attached client's typing.
     Send {
         /// Name of the target agent.
+        #[arg(add = ArgValueCandidates::new(agent_name_candidates))]
         name: String,
         /// Text to send. If omitted, read from stdin.
         text: Option<String>,

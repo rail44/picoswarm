@@ -1,7 +1,13 @@
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use picoswarm::{cli, client, daemon};
 
 fn main() -> anyhow::Result<()> {
+    // When the binary is invoked via `COMPLETE=<shell> pswarm` (the
+    // dynamic-completion entry point set up by `pswarm completions`),
+    // generate candidates and exit before any other startup work
+    // touches stdout. No-op for normal CLI invocations.
+    clap_complete::CompleteEnv::with_factory(cli::Cli::command).complete();
+
     let parsed = cli::Cli::parse();
 
     match parsed.command {

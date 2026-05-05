@@ -11,6 +11,12 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
+# Pinned: `unstable-dynamic` is the only API channel for runtime
+# completion (issue #13). Pin to a known-good version and re-test
+# on intentional bumps; the API has been stable since 4.5.31 (2024-10)
+# but the `unstable-` prefix means breaking changes can land in any
+# minor release.
+clap_complete = { version = "=4.6.3", features = ["unstable-dynamic"] }
 crossterm = "0.29.0"
 daemonize = "0.5.0"
 directories = "6.0.0"
