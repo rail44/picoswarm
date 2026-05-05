@@ -1,8 +1,11 @@
 //! `pswarm send`: write text to a running agent's PTY without attaching.
 //!
 //! Reads `text` from the positional argument or stdin (whichever is
-//! provided), ensures the payload ends with a newline so Claude Code
-//! submits it, and ships it to the daemon as a single `Send` request.
+//! provided), strips trailing line endings from the input, and appends
+//! a single CR (`\r`) so the byte stream looks like the user pressed
+//! Enter at the end. TUI agents in raw-mode (Claude Code, vim, etc.)
+//! treat LF as "insert newline" and CR as "submit"; using CR is the
+//! same convention `tmux send-keys Enter` follows.
 
 use anyhow::{Result, bail};
 use std::io::{IsTerminal, Read};
@@ -15,9 +18,12 @@ pub async fn run(name: String, text: Option<String>) -> Result<()> {
         Some(t) => t.into_bytes(),
         None => read_stdin_or_bail()?,
     };
-    if !payload.ends_with(b"\n") {
-        payload.push(b'\n');
+    // Trim any trailing CR/LF the user (or `echo`) may have included,
+    // then append exactly one CR.
+    while matches!(payload.last(), Some(b'\n' | b'\r')) {
+        payload.pop();
     }
+    payload.push(b'\r');
 
     let mut stream = connection::connect_with_handshake().await?;
     let (mut reader, mut writer) = stream.split();

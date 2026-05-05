@@ -76,10 +76,12 @@ pub enum Command {
     },
     /// Write text to a running agent's PTY without attaching.
     ///
-    /// If TEXT is omitted, reads from stdin instead. Always ends the
-    /// payload with a newline (so Claude Code submits it), unless the
-    /// input already ends with one. Allowed while a client is attached;
-    /// the bytes interleave with the attached client's typing.
+    /// If TEXT is omitted, reads from stdin instead. Trailing line
+    /// endings are stripped from the input and a single CR (`\r`) is
+    /// appended so the agent sees Enter, not just a newline (TUI
+    /// agents in raw mode treat LF as "insert newline" and CR as
+    /// "submit"). Allowed while a client is attached; the bytes
+    /// interleave with the attached client's typing.
     Send {
         /// Name of the target agent.
         #[arg(add = ArgValueCandidates::new(agent_name_candidates))]

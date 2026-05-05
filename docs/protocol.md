@@ -201,7 +201,7 @@ D → C : Ok                          |  Error { NotFound | Internal }
 < close >
 ```
 
-The daemon does not interpret `payload`; it forwards the bytes verbatim to the writer side of the agent's PTY. The CLI ensures `payload` ends with a newline (so Claude Code submits the message) unless the input already ends with one. Sending while another client is attached is allowed; the bytes interleave with the attached client's stdin. There is no built-in send-to-self guard at this protocol version — the caller is responsible for not invoking the CLI on its own agent.
+The daemon does not interpret `payload`; it forwards the bytes verbatim to the writer side of the agent's PTY. The `pswarm send` CLI strips trailing CR/LF from the input and appends a single CR (`\r`) so TUI agents in raw mode treat the message as completed (LF would be interpreted as "insert newline"). Other clients can put any bytes they like in `payload`. Sending while another client is attached is allowed; the bytes interleave with the attached client's stdin. There is no built-in send-to-self guard at this protocol version — the caller is responsible for not invoking the CLI on its own agent.
 
 ### `pswarm daemon stop` / `restart`
 
