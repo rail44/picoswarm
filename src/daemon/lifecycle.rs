@@ -61,7 +61,18 @@ pub fn start() -> Result<()> {
         .build()
         .context("failed to build tokio runtime")?;
 
-    runtime.block_on(super::server::run(socket_path))?;
+    // Spawner must be created post-daemonize (so the OS thread lives in
+    // the surviving child process) and outside the tokio runtime (so
+    // its lifetime is bound to this function, not to a worker thread
+    // tokio might reap). The Spawner's thread becomes the parent of
+    // every agent fork, which is what makes `PR_SET_PDEATHSIG` actually
+    // fire on daemon shutdown rather than on a random worker timeout.
+    // The runtime handle is passed so the spawner thread can `enter`
+    // the runtime before each fork (some spawn-time bookkeeping calls
+    // `tokio::spawn`).
+    let spawner = super::spawner::Spawner::new(runtime.handle().clone())?;
+
+    runtime.block_on(super::server::run(socket_path, spawner))?;
 
     info!("picoswarm daemon stopping");
     Ok(())

@@ -23,12 +23,12 @@ use tracing::{debug, info, warn};
 
 use crate::daemon::output_session::{SessionEvent, SubscribeReply};
 use crate::daemon::registry::{AgentEntry, Registry};
-use crate::daemon::session;
+use crate::daemon::spawner::Spawner;
 use crate::protocol::{
     self, ClientToDaemon, DaemonToClient, ErrorCode, PROTOCOL_VERSION, RunRequest, TermSize,
 };
 
-pub async fn run(socket_path: PathBuf) -> Result<()> {
+pub async fn run(socket_path: PathBuf, spawner: Spawner) -> Result<()> {
     if socket_path.exists() {
         match UnixStream::connect(&socket_path).await {
             Ok(_) => {
@@ -68,7 +68,8 @@ pub async fn run(socket_path: PathBuf) -> Result<()> {
                 let (stream, _) = accept_result?;
                 let reg = registry.clone();
                 let sd = Arc::clone(&shutdown);
-                tokio::spawn(handle_connection(stream, reg, sd, started_at));
+                let sp = spawner.clone();
+                tokio::spawn(handle_connection(stream, reg, sd, started_at, sp));
             }
         }
     }
@@ -96,8 +97,11 @@ async fn handle_connection(
     registry: Registry,
     shutdown: Arc<Notify>,
     started_at: std::time::Instant,
+    spawner: Spawner,
 ) {
-    if let Err(e) = handle_connection_inner(&mut stream, registry, shutdown, started_at).await {
+    if let Err(e) =
+        handle_connection_inner(&mut stream, registry, shutdown, started_at, &spawner).await
+    {
         warn!("connection ended: {e:#}");
     }
 }
@@ -107,6 +111,7 @@ async fn handle_connection_inner(
     registry: Registry,
     shutdown: Arc<Notify>,
     started_at: std::time::Instant,
+    spawner: &Spawner,
 ) -> Result<()> {
     let (mut reader, mut writer) = stream.split();
 
@@ -180,7 +185,7 @@ async fn handle_connection_inner(
             }
         }
         other => {
-            let response = handle_oneshot(other, &registry, started_at).await;
+            let response = handle_oneshot(other, &registry, started_at, spawner).await;
             protocol::write_msg(&mut writer, &response).await?;
         }
     }
@@ -191,11 +196,12 @@ async fn handle_oneshot(
     msg: ClientToDaemon,
     registry: &Registry,
     started_at: std::time::Instant,
+    spawner: &Spawner,
 ) -> DaemonToClient {
     match msg {
         ClientToDaemon::Ping => DaemonToClient::Pong,
 
-        ClientToDaemon::Run(req) => handle_run(req, registry).await,
+        ClientToDaemon::Run(req) => handle_run(req, registry, spawner).await,
 
         ClientToDaemon::Ls => DaemonToClient::AgentList(registry.list()),
 
@@ -305,22 +311,17 @@ async fn handle_oneshot(
     }
 }
 
-async fn handle_run(req: RunRequest, registry: &Registry) -> DaemonToClient {
+async fn handle_run(req: RunRequest, registry: &Registry, spawner: &Spawner) -> DaemonToClient {
     let name = req.name.clone();
-    let entry_result = tokio::task::spawn_blocking(move || session::spawn_session(req)).await;
-
-    let entry = match entry_result {
-        Ok(Ok(entry)) => entry,
-        Ok(Err(e)) => {
+    // Routing fork through the dedicated spawner thread is load-bearing:
+    // see `daemon::spawner` for why `spawn_blocking` would silently kill
+    // every agent ~10s after spawn.
+    let entry = match spawner.spawn(req).await {
+        Ok(entry) => entry,
+        Err(e) => {
             return DaemonToClient::Error {
                 code: ErrorCode::SpawnFailed,
                 message: format!("{e:#}"),
-            };
-        }
-        Err(e) => {
-            return DaemonToClient::Error {
-                code: ErrorCode::Internal,
-                message: format!("spawn task panicked: {e}"),
             };
         }
     };

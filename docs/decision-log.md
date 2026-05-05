@@ -532,3 +532,95 @@ trigger to revisit is the same as #05's original triggers: a real
 consumer wanting structured event data, or a `pswarm history`
 subcommand becoming desirable.
 
+---
+
+## 15. Dedicated spawner thread for `PR_SET_PDEATHSIG` (corrects entry 11)
+
+### Context
+
+Item 11 introduced `PR_SET_PDEATHSIG(SIGTERM)` via `pre_exec` so that
+the kernel kills agents when the daemon dies hard. The reflection
+section claimed:
+
+> Multi-threaded `PR_SET_PDEATHSIG` is not the footgun the manpage
+> warns about, in our case. […] In practice, tokio's worker threads
+> are pooled and stay alive for the runtime's lifetime, so the
+> signal only fires when the daemon process truly exits.
+
+That claim was wrong. The bug surfaced in real use: every agent
+died ~10 s after spawn.
+
+### What actually happens
+
+`session::spawn_session` was being called via
+`tokio::task::spawn_blocking(...)`. The blocking task runs on a
+worker from tokio's **blocking pool**, which is distinct from the
+runtime's worker pool. Blocking-pool workers have a default
+`thread_keep_alive` of 10 s — once a worker has been idle for
+10 s, tokio reaps it. When the worker thread terminates, the
+kernel fires `PR_SET_PDEATHSIG` for every child it forked, sending
+each agent SIGTERM.
+
+The runtime's *own* worker pool does stay alive for the runtime's
+lifetime. The blocking pool's workers do not. Item 11 conflated the
+two.
+
+### The fix
+
+Introduce a dedicated long-lived OS thread (`daemon::spawner`)
+that owns all forks. The spawner thread receives spawn requests
+over a `std::sync::mpsc` channel and runs `session::spawn_session`
+synchronously on its own stack. Because the thread is started in
+`lifecycle::start` and lives until the daemon process exits, it
+becomes the kernel-level "parent thread" for every agent's
+`PR_SET_PDEATHSIG`, and the signal fires only when the daemon
+really goes away.
+
+The spawner needs the tokio runtime so that
+`session::spawn_session`'s call into `output_session::spawn`
+(which uses `tokio::spawn`) can find a reactor. We pass the
+`Handle` into `Spawner::new` and `handle.enter()` it inside the
+spawner thread's loop.
+
+### Reasoning
+
+Three options were weighed before picking the dedicated thread:
+
+- **Drop `PR_SET_PDEATHSIG`**: simplest, but loses item 11's gain
+  (orphan-on-hard-kill prevention) and would require building an
+  alternative reaper. Not worth backing out a working mechanism.
+- **`thread_keep_alive(very-long)` on the runtime**: a one-line
+  knob change that keeps blocking workers alive indefinitely.
+  Effective in practice but couples our orphan-prevention to a
+  performance-tuning configuration; future readers wouldn't
+  recognise the load-bearing role of the value, and changing it
+  later for unrelated reasons would silently re-introduce the bug.
+- **A `tokio::spawn`'d task on a tokio worker**: would also keep
+  the parent thread alive for the runtime's lifetime, but relies
+  on undocumented worker-lifetime semantics and on the task not
+  migrating between workers between forks. Less explicit than a
+  dedicated OS thread.
+
+The codebase already uses `std::thread` directly for the per-agent
+PTY-reader thread (`session::drain_into_session`), so adding one
+more long-lived OS thread fits the existing pattern rather than
+introducing a new concept.
+
+### Reflection
+
+The original entry 11 reflection said tokio worker threads "are
+pooled and stay alive for the runtime's lifetime." That's true for
+the runtime's main worker pool but **not** for the blocking pool,
+which has an independent reaping policy. When relying on
+thread-bound kernel state, the right model isn't "trust tokio to
+keep threads alive" — it's "own a thread whose lifetime I can
+state precisely in one sentence."
+
+The bug was masked in tests (every test finishes well under 10 s)
+and in our earlier smoke verification (we killed the daemon ~2 s
+after spawn). A test that explicitly waits longer than the
+keep-alive timeout would have caught it. Adding such a test is
+costly (the suite would gain ~12 s of wall time) and the failure
+mode is now well-understood; we rely on the dedicated-thread fix
+plus this entry to keep us honest.
+

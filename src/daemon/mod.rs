@@ -7,6 +7,7 @@ mod output_session;
 mod registry;
 mod server;
 mod session;
+mod spawner;
 
 pub fn run() -> anyhow::Result<()> {
     lifecycle::start()
