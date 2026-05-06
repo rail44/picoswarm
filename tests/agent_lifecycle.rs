@@ -5,7 +5,7 @@ mod common;
 
 use common::TestDaemon;
 use picoswarm::protocol::{
-    self, AgentStatus, ClientToDaemon, DaemonToClient, ErrorCode, RunRequest, TermSize,
+    self, AgentStatus, ClientToDaemon, DaemonToClient, ErrorCode, Event, RunRequest, TermSize,
 };
 
 fn sleep_request(name: &str) -> RunRequest {
@@ -508,4 +508,110 @@ async fn attach_unknown_returns_not_found() {
         DaemonToClient::Error { code, .. } => assert_eq!(code, ErrorCode::NotFound),
         other => panic!("expected NotFound, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn event_records_in_summary() {
+    let daemon = TestDaemon::start();
+    run_agent(&daemon, "evt").await;
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Event {
+            name: "evt".to_string(),
+            event: Event::Idle,
+        },
+    )
+    .await
+    .expect("write Event");
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read Event response")
+    {
+        DaemonToClient::Ok => {}
+        other => panic!("expected Ok, got {other:?}"),
+    }
+    drop(stream);
+
+    let summaries = list_agents(&daemon).await;
+    let entry = summaries
+        .iter()
+        .find(|s| s.name == "evt")
+        .expect("agent in list");
+    let (recorded, _ts) = entry.last_event.expect("last_event populated");
+    assert_eq!(recorded, Event::Idle);
+}
+
+#[tokio::test]
+async fn event_unknown_returns_not_found() {
+    let daemon = TestDaemon::start();
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Event {
+            name: "nope".to_string(),
+            event: Event::Idle,
+        },
+    )
+    .await
+    .expect("write Event");
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read response")
+    {
+        DaemonToClient::Error { code, .. } => assert_eq!(code, ErrorCode::NotFound),
+        other => panic!("expected NotFound, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn agent_name_env_is_injected() {
+    // Closes issue #02's first half: PSWARM_AGENT_NAME is set in the
+    // spawned agent's environment. The id half rides the same path
+    // and is implicitly covered.
+    let daemon = TestDaemon::start();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outpath = dir.path().join("envdump");
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Run(RunRequest {
+            name: "selfname".to_string(),
+            cmd: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "printenv PSWARM_AGENT_NAME > {} ; sleep 5",
+                    outpath.display()
+                ),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            initial_size: TermSize { rows: 24, cols: 80 },
+        }),
+    )
+    .await
+    .expect("write Run");
+    #[allow(clippy::let_underscore_must_use)]
+    let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
+    drop(stream);
+
+    for _ in 0..40 {
+        if outpath.metadata().is_ok_and(|m| m.len() > 0) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let dump = std::fs::read_to_string(&outpath).expect("read envdump");
+    assert_eq!(
+        dump.trim(),
+        "selfname",
+        "PSWARM_AGENT_NAME should match the spawn request's name",
+    );
 }

@@ -6,11 +6,12 @@
 use anyhow::{Result, anyhow};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Hard cap on a single frame's payload size, to keep a malformed length
 /// prefix from triggering an arbitrarily large allocation.
@@ -37,6 +38,38 @@ pub enum AgentStatus {
     Dead,
 }
 
+/// Lifecycle events an agent (or its plugin glue) can report back to
+/// the daemon via `pswarm event`. The set is intentionally small — a
+/// new variant requires a `PROTOCOL_VERSION` bump.
+///
+/// `ValueEnum` is derived so the same type drives clap's CLI parser
+/// in `pswarm event <event>`; clap is already a workspace dep.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, clap::ValueEnum)]
+pub enum Event {
+    /// Agent finished its current turn and is waiting for the next
+    /// user input. Wired from Claude Code's `Stop` hook, Codex's
+    /// `agent-turn-complete`, Gemini's `AfterAgent`, etc.
+    Idle,
+    /// Agent needs human input that isn't a normal turn — e.g. a
+    /// permission prompt. Wired from Claude Code's `Notification`
+    /// hook.
+    Attention,
+    /// Agent's session is ending. Wired from Claude Code's
+    /// `SessionEnd` hook. Distinct from process death (which the
+    /// daemon detects via PTY EOF).
+    Exit,
+}
+
+impl fmt::Display for Event {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Idle => "idle",
+            Self::Attention => "attention",
+            Self::Exit => "exit",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSummary {
     pub id: Uuid,
@@ -44,6 +77,10 @@ pub struct AgentSummary {
     pub status: AgentStatus,
     pub cwd: Option<PathBuf>,
     pub created_at: i64,
+    /// Most recent lifecycle event reported by the agent (via the
+    /// `pswarm event` subcommand), with the unix timestamp at which
+    /// the daemon recorded it. `None` when no event has been seen.
+    pub last_event: Option<(Event, i64)>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -109,6 +146,14 @@ pub enum ClientToDaemon {
     /// by closing the connection.
     View {
         name: String,
+    },
+    /// Record a lifecycle event reported by the agent itself. Sent
+    /// from `pswarm event <name> <event>` and from the bundled Claude
+    /// Code plugin's hook scripts. The daemon responds with `Ok` on
+    /// success or `Error { NotFound, ... }` if the agent is gone.
+    Event {
+        name: String,
+        event: Event,
     },
 }
 

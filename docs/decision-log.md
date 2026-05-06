@@ -681,3 +681,88 @@ The trade reveals a property we hadn't named explicitly: picoswarm's
 of the integration surface we picked. Surface choice shapes feature
 scope as much as any explicit decision does.
 
+## 17. Agent readiness via the agent's own hooks; Claude Code gets a real plugin, others get config recipes
+
+### What we decided
+
+To detect "agent ready for next input" without scraping the TUI,
+picoswarm exposes a thin receiver — `pswarm event <name> <event>`
+(or `pswarm event self <event>` to resolve the name from
+`$PSWARM_AGENT_NAME`) — and asks the agent's own lifecycle hooks to
+call it. For Claude Code we ship the wiring as a real plugin bundle
+(`plugins/claude-code/`, installable via `claude --plugin-dir`).
+For other agents, the equivalent is a one-line config snippet in
+`docs/integration.md`, not a bundled artifact.
+
+### Why hooks rather than output scraping
+
+Several heuristics for "is this agent ready" were considered: output
+quiescence (silence for N ms), TUI pattern matching (look for the
+input box prompt), VT cursor position, BEL/OSC9 inspection. All of
+them are fragile against TUI version drift, mode toggles, and
+language settings. The agents we care about already expose a
+turn-complete callback (`docs/agent-hooks-survey.md` catalogues
+them). Calling the agent's own primitive is both more accurate and
+agent-version-stable.
+
+### Why a closed enum for the event vocabulary
+
+The first sketch made the event a free string ("daemon stays
+agent-agnostic"). On reflection that flexibility was illusory: the
+producers (hook configs) and the consumer (`pswarm ls` formatting)
+are both code we write, so a free-string surface buys nothing and
+loses compile-time exhaustiveness. The protocol now carries
+`enum Event { Idle, Attention, Exit }`. New variants ride a protocol
+bump — a low-cost operation we already do (`v3 → v8` so far).
+
+### Why an asymmetric integration story
+
+Claude Code has a rich plugin format (manifest, hooks file, scripts
+under `${CLAUDE_PLUGIN_ROOT}`, `claude --plugin-dir` for local
+loading). Building against it means a user can install our wiring
+with one command and get all three signals (`Stop`, `Notification`,
+`SessionEnd`) without hand-editing settings. The other surveyed
+agents do not converge on a comparable bundle format — most accept
+hooks via plain `settings.json` snippets, OpenCode uses npm packages,
+Aider has only `--notifications-command`. Trying to ship a uniform
+"plugin" abstraction across all of them would force the lowest common
+denominator on each one. Instead, the receiver (`pswarm event`) is
+agent-agnostic, and per-agent recipes live in `docs/integration.md`.
+
+### Why no wrapper shell script in the plugin
+
+The first cut shipped a `scripts/event.sh` that handled
+`PSWARM_AGENT_NAME` absence, suppressed errors, and called `pswarm
+event self <event>`. Once that logic was identified, it was clearly
+all already inside our binary's natural responsibilities — agents
+already inherit the daemon's `PATH`, so `pswarm` is reliably callable
+from a hook. The plugin's `hooks.json` now invokes
+`pswarm event self <event>` directly, and the subcommand silently
+exits 0 when called with `self` outside a pswarm-spawned context (or
+when the daemon is unreachable, or returns NotFound). Hook callers
+get the right behaviour without a shell-script intermediary, and the
+plugin is reduced to a manifest + a `hooks.json`.
+
+### Closure of issue #02 (agent self-invocation, env injection)
+
+This work needed `$PSWARM_AGENT_NAME` available inside the spawned
+agent so the hook script could resolve the `self` keyword. That
+requirement is exactly the trigger noted in
+`issues/02-agent-self-invocation.md`'s "Triggers to revisit" section.
+We took Approach A (env injection only): `PSWARM_AGENT_NAME` and
+`PSWARM_AGENT_ID` are set at spawn, and the agent name `self` is
+reserved so `pswarm event self idle` etc. compose cleanly. The
+send-to-self loop guard remains deferred to a later issue.
+
+### Reflection
+
+The plan opened with "what's the most general primitive we can build"
+and almost shipped a uniform abstraction over disparate agent hook
+shapes. Walking back to "ship the Claude plugin now, write recipes
+for the others" was the right call: less code, no premature
+abstraction, and the per-agent recipes double as documentation that
+the receiver itself doesn't change. The concrete-first move also
+made the env-injection prerequisite (issue #02) actionable —
+before this, we had no consumer that needed identity in env, so the
+issue stayed parked.
+

@@ -43,15 +43,22 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
         cmd = cmd.current_dir(cwd);
     }
 
+    // The agent's id needs to land in the spawned env, so generate it
+    // here and reuse the same value for the AgentEntry below.
+    let agent_id = Uuid::new_v4();
+
     // Env in three layers, last write wins:
-    //   daemon env -> request env -> PSWARM_DAEMON=1 (daemon-controlled)
+    //   daemon env -> request env -> daemon-controlled identity
     for (k, v) in std::env::vars() {
         cmd = cmd.env(k, v);
     }
     for (k, v) in &req.env {
         cmd = cmd.env(k, v);
     }
-    cmd = cmd.env("PSWARM_DAEMON", "1");
+    cmd = cmd
+        .env("PSWARM_DAEMON", "1")
+        .env("PSWARM_AGENT_NAME", &req.name)
+        .env("PSWARM_AGENT_ID", agent_id.to_string());
 
     // PR_SET_PDEATHSIG: kernel SIGTERMs the child if the daemon dies
     // hard, preventing orphan agents reparented to init (issue #21).
@@ -97,7 +104,7 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
         .context("failed to start the PTY reader thread")?;
 
     Ok(AgentEntry {
-        id: Uuid::new_v4(),
+        id: agent_id,
         name: req.name,
         cwd: req.cwd,
         created_at: now_unix(),
@@ -107,6 +114,7 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
         inbox,
         attached,
         dead,
+        last_event: Arc::new(Mutex::new(None)),
     })
 }
 
@@ -151,6 +159,11 @@ fn validate_name(name: &str) -> Result<()> {
     {
         return Err(anyhow!(
             "agent name may only contain a-z, A-Z, 0-9, '.', '_', '-': {name}"
+        ));
+    }
+    if name == "self" {
+        return Err(anyhow!(
+            "the name `self` is reserved for `pswarm <verb> self` env-resolution"
         ));
     }
     Ok(())

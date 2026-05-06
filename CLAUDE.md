@@ -92,6 +92,8 @@ If you are about to propose something that violates one of these — for "simpli
 - **daemon**: The long-lived `pswarm daemon` process that owns all PTYs and serves clients over a Unix socket.
 - **client**: A short-lived `pswarm <subcommand>` invocation that talks to the daemon.
 - **cwd**: The working directory the agent process starts in. The user is responsible for placing themselves in the right directory (e.g. a git worktree) before running `pswarm run` — picoswarm does not manage worktrees itself.
+- **event**: A lifecycle signal an agent reports back to the daemon via `pswarm event` (`idle`, `attention`, `exit`). Wired from each agent's own hook surface; `plugins/claude-code/` ships the Claude Code wiring and `docs/agent-hooks-survey.md` catalogues the per-agent equivalents.
+- **plugins/**: Per-agent integration bundles. `plugins/claude-code/` is the only one shipped today; future per-agent integrations live as siblings.
 
 ---
 

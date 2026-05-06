@@ -1,0 +1,7 @@
+{
+  "name": "picoswarm",
+  "version": "0.1.0",
+  "description": "Forward Claude Code lifecycle (Stop / Notification / SessionEnd) to the picoswarm daemon as agent events.",
+  "repository": "https://github.com/rail44/picoswarm",
+  "license": "MIT"
+}

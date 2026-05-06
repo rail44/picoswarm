@@ -16,12 +16,12 @@ use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::daemon::output_session::SessionInbox;
-use crate::protocol::{AgentStatus, AgentSummary};
+use crate::protocol::{AgentStatus, AgentSummary, Event};
 
 const GRACEFUL_TERMINATE_GRACE: Duration = Duration::from_secs(1);
 const GRACEFUL_TERMINATE_POLL: Duration = Duration::from_millis(100);
@@ -40,6 +40,11 @@ pub struct AgentEntry {
     pub inbox: SessionInbox,
     pub attached: Arc<AtomicBool>,
     pub dead: Arc<AtomicBool>,
+    /// Most recent lifecycle event reported by the agent via `pswarm
+    /// event`, alongside the unix timestamp of the report. The
+    /// daemon never writes through this on its own — only the
+    /// `ClientToDaemon::Event` handler does.
+    pub last_event: Arc<Mutex<Option<(Event, i64)>>>,
 }
 
 impl AgentEntry {
@@ -54,6 +59,20 @@ impl AgentEntry {
             },
             cwd: self.cwd.clone(),
             created_at: self.created_at,
+            last_event: self.last_event.lock().ok().and_then(|g| *g),
+        }
+    }
+
+    /// Stamp the entry with `event` at the current unix time. A
+    /// poisoned mutex on `last_event` is treated as a no-op rather
+    /// than an error: the field is purely informational, and a
+    /// failed update never blocks the agent's actual work.
+    pub fn record_event(&self, event: Event) {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs().cast_signed());
+        if let Ok(mut guard) = self.last_event.lock() {
+            *guard = Some((event, now));
         }
     }
 }

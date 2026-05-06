@@ -1,8 +1,10 @@
 # Agent self-invocation (env injection + send-to-self guard)
 
 - **Priority:** High
-- **Status:** Deferred — held until a feature that needs the `self`
-  concept lands (#16 tag/link, send-to-self guard for #03, etc.).
+- **Status:** Partially resolved (env injection done as part of the
+  `pswarm event --self` work — see `docs/decision-log.md` item 17).
+  Send-to-self guard and a dedicated `self` keyword for `attach` /
+  `cwd` etc. remain deferred.
 
 ### Description
 

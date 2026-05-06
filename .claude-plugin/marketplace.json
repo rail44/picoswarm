@@ -1,0 +1,17 @@
+{
+  "name": "picoswarm",
+  "owner": {
+    "name": "rail44"
+  },
+  "plugins": [
+    {
+      "name": "picoswarm",
+      "source": "./plugins/claude-code",
+      "description": "Forward Claude Code lifecycle (Stop / Notification / SessionEnd) to the pswarm daemon as agent events.",
+      "homepage": "https://github.com/rail44/picoswarm",
+      "license": "MIT",
+      "category": "orchestration",
+      "keywords": ["picoswarm", "agent", "hooks", "lifecycle"]
+    }
+  ]
+}

@@ -8,6 +8,7 @@ mod connection;
 pub mod cwd;
 pub mod daemon;
 pub mod doctor;
+pub mod event;
 pub mod ls;
 pub mod rm;
 pub mod run;

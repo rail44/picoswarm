@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use clap_complete::engine::ArgValueCandidates;
 
 use crate::client::completions::agent_name_candidates;
+use crate::protocol::Event;
 
 #[derive(Parser)]
 #[command(
@@ -96,6 +97,27 @@ pub enum Command {
         /// Name of the agent to view.
         #[arg(add = ArgValueCandidates::new(agent_name_candidates))]
         name: String,
+    },
+    /// Record a lifecycle event for an agent.
+    ///
+    /// Used by hooks running in the agent's environment to signal
+    /// `idle` (turn complete, ready for input), `attention` (needs
+    /// human input out-of-band, e.g. permission prompt), or `exit`
+    /// (session ending). The bundled Claude Code plugin under
+    /// `plugins/claude-code/` wires Claude's `Stop`, `Notification`,
+    /// and `SessionEnd` hooks into this command.
+    ///
+    /// Pass `self` as the agent name to resolve it from
+    /// `$PSWARM_AGENT_NAME` (set automatically by `pswarm run`):
+    /// `pswarm event self idle`.
+    Event {
+        /// Target agent name, or the literal `self` to resolve from
+        /// `$PSWARM_AGENT_NAME`.
+        #[arg(add = ArgValueCandidates::new(agent_name_candidates))]
+        name: String,
+        /// The lifecycle event to record.
+        #[arg(value_enum)]
+        event: Event,
     },
     /// Manage the picoswarm daemon lifecycle.
     Daemon {

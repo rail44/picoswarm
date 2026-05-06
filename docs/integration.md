@@ -59,6 +59,27 @@ function pswt
 end
 ```
 
+### Claude Code: per-agent readiness via the bundled plugin
+
+`plugins/claude-code/` ships a small Claude Code plugin that wires Claude's `Stop`, `Notification`, and `SessionEnd` hooks into the `pswarm event` subcommand. Once installed, `pswarm ls` shows a fourth column with the most recent lifecycle event:
+
+```
+demo  running  <id>  idle (2s)
+```
+
+The picoswarm repo doubles as a Claude Code marketplace (`.claude-plugin/marketplace.json` at the root). Install once and every `pswarm run … -- claude` agent picks up the plugin automatically:
+
+```sh
+claude plugin marketplace add /absolute/path/to/picoswarm
+claude plugin install picoswarm@picoswarm
+```
+
+For per-session loading without a permanent install, `claude --plugin-dir /absolute/path/to/picoswarm/plugins/claude-code` works too.
+
+The plugin needs `$PSWARM_AGENT_NAME` to identify itself; the daemon sets that variable automatically in every spawned agent. Outside a `pswarm run`-spawned session the hook command silently exits 0, so installing the plugin into a normal Claude session is a no-op.
+
+Equivalents for other agents (Codex `notify`, Gemini `AfterAgent`, Cursor `stop`, Copilot `agentStop`, OpenCode `session.idle`, Aider `--notifications-command`) follow the same pattern — call `pswarm event self <event>` from the agent's hook surface — but no bundled config ships yet. See `docs/agent-hooks-survey.md` for the per-agent hook reference.
+
 ### Notifications on agent exit (manual)
 
 There's no built-in agent-exit hook today. If you want one, poll `pswarm ls` and react when an agent transitions to `dead`:

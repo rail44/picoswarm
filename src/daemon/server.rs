@@ -25,7 +25,7 @@ use crate::daemon::output_session::{SessionEvent, SubscribeReply};
 use crate::daemon::registry::{AgentEntry, Registry};
 use crate::daemon::spawner::Spawner;
 use crate::protocol::{
-    self, ClientToDaemon, DaemonToClient, ErrorCode, PROTOCOL_VERSION, RunRequest, TermSize,
+    self, ClientToDaemon, DaemonToClient, ErrorCode, Event, PROTOCOL_VERSION, RunRequest, TermSize,
 };
 
 pub async fn run(socket_path: PathBuf, spawner: Spawner) -> Result<()> {
@@ -259,6 +259,8 @@ async fn handle_oneshot(
             },
         },
 
+        ClientToDaemon::Event { name, event } => handle_event(registry, &name, event),
+
         ClientToDaemon::Send { name, payload } => match registry.lookup(&name) {
             Some(entry) => {
                 // Write on the blocking pool; the PTY writer is std::io,
@@ -309,6 +311,19 @@ async fn handle_oneshot(
             }
         }
     }
+}
+
+fn handle_event(registry: &Registry, name: &str, event: Event) -> DaemonToClient {
+    registry.lookup(name).map_or_else(
+        || DaemonToClient::Error {
+            code: ErrorCode::NotFound,
+            message: format!("no agent named {name}"),
+        },
+        |entry| {
+            entry.record_event(event);
+            DaemonToClient::Ok
+        },
+    )
 }
 
 async fn handle_run(req: RunRequest, registry: &Registry, spawner: &Spawner) -> DaemonToClient {
