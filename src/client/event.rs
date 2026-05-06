@@ -13,31 +13,15 @@
 //! no-op, and a transient daemon issue never breaks an agent's
 //! session. To inject an event for a specific agent during debug,
 //! override the env: `PSWARM_AGENT_NAME=foo pswarm event idle`.
-//!
-//! Transitional shim: a leading literal `self` argument is silently
-//! dropped. This keeps live Claude sessions that loaded plugin v0.2.0
-//! (which still calls `pswarm event self <event>` from its hooks)
-//! from spamming Stop-hook errors. To be removed once no live
-//! sessions still hold the v0.2.0 plugin.
 
 use anyhow::{Result, bail};
-use clap::ValueEnum;
 
 use crate::client::connection;
 use crate::protocol::{self, ClientToDaemon, DaemonToClient, Event};
 
 const ENV_AGENT_NAME: &str = "PSWARM_AGENT_NAME";
-const LEGACY_SELF: &str = "self";
 
-pub async fn run(args: Vec<String>) -> Result<()> {
-    let event_str: &str = match args.as_slice() {
-        [single] => single,
-        [first, second] if first == LEGACY_SELF => second,
-        _ => bail!("usage: pswarm event <event>; got {} arguments", args.len()),
-    };
-    let event = Event::from_str(event_str, true)
-        .map_err(|e| anyhow::anyhow!("invalid event {event_str:?}: {e}"))?;
-
+pub async fn run(event: Event) -> Result<()> {
     let Ok(name) = std::env::var(ENV_AGENT_NAME) else {
         // Not running under pswarm: best-effort no-op.
         return Ok(());

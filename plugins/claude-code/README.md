@@ -42,7 +42,6 @@ the plugin automatically. No `--plugin-dir` needed.
 ```sh
 pswarm run -d demo -- claude
 pswarm send demo 'say hi'
-pswarm send demo ''
 pswarm ls
 # demo  running  <id>  idle (2s)
 ```
