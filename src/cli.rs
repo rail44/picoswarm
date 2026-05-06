@@ -2,7 +2,6 @@ use clap::{Parser, Subcommand};
 use clap_complete::engine::ArgValueCandidates;
 
 use crate::client::completions::agent_name_candidates;
-use crate::protocol::Event;
 
 #[derive(Parser)]
 #[command(
@@ -113,10 +112,16 @@ pub enum Command {
     /// no-op outside a pswarm-spawned session. To inject an event
     /// for a specific agent during debug, override the env:
     /// `PSWARM_AGENT_NAME=foo pswarm event idle`.
+    ///
+    /// Transitional accept-list: as a back-compat shim for plugin
+    /// v0.2.0 hooks that still call `pswarm event self <event>`, a
+    /// leading literal `self` argument is silently dropped. Will be
+    /// removed once no live sessions still hold the v0.2.0 plugin.
     Event {
-        /// The lifecycle event to record.
-        #[arg(value_enum)]
-        event: Event,
+        /// `<event>`, optionally preceded by the literal `self`
+        /// (v0.2.0 compat). 1 or 2 args; first must be `self` if 2.
+        #[arg(num_args = 1..=2)]
+        args: Vec<String>,
     },
     /// Manage the picoswarm daemon lifecycle.
     Daemon {
