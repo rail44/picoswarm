@@ -1,6 +1,17 @@
 {
   "description": "picoswarm: forward Claude lifecycle to the pswarm daemon",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pswarm event self idle",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

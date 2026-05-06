@@ -8,9 +8,16 @@ input, or shutting down — without scraping its TUI.
 
 | Claude hook | `pswarm event` value | Means |
 |-------------|----------------------|-------|
+| `SessionStart` | `idle` | Claude has finished booting (or resumed) and is ready for the first input. |
 | `Stop` | `idle` | Claude finished a turn and is waiting for the next user input. |
 | `Notification` | `attention` | Claude needs human input out-of-band (typically a permission prompt). |
 | `SessionEnd` | `exit` | The Claude session is ending. |
+
+`SessionStart` and `Stop` both map to `idle` because both signal
+"ready for input" — the only difference is whether it's the first
+input of a session or a continuation. Scripts that want to drive an
+agent can therefore wait for `last_event=idle` after spawn without
+caring which hook produced it.
 
 The hooks invoke `pswarm event self <value>` directly — no shell
 glue. The literal `self` resolves the agent's name from
