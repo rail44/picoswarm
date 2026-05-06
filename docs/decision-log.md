@@ -840,3 +840,101 @@ the two and ate an argument slot that the principle "name argument
 = targeting another agent" should own. Removing it makes both the
 CLI grammar and the hook-config easier to read.
 
+## 19. `pswarm inbox` — file-direct, line-cursor inter-agent messaging
+
+### What we decided
+
+Add `pswarm inbox post <to> <body>` and `pswarm inbox read [--follow]`
+as a file-backed message channel between agents. Each agent has an
+append-only JSON Lines file at
+`$XDG_STATE_HOME/picoswarm/inbox/<name>.jsonl` plus a sidecar
+`<name>.cursor` holding the reader's last-read line number (1-based).
+No daemon mediation — senders and readers touch the files directly,
+through the `pswarm inbox` thin wrapper.
+
+Receiver-side Claude wraps `pswarm inbox read --follow` in Monitor
+to fold inbox notifications into its conversation as they land
+(stream of stdout lines = stream of notifications). Non-Claude
+agents poll at turn boundaries via plain `pswarm inbox read`.
+
+### Why file-direct (not daemon-mediated)
+
+Agreed earlier (see decision-log item 18 for the analogous `event`
+discussion). Concretely: keeps the daemon out of message-passing
+state, makes debug trivial (`cat <inbox>.jsonl`), survives daemon
+restarts (a daemon-memory cursor would re-emit history on every
+restart), and avoids a protocol bump.
+
+### Why line-number cursor (not byte offset)
+
+Both work; line-number wins on partial-write resilience (only
+fully-written `\n`-terminated lines are counted) and on debug
+ergonomics ("resume from line 32" reads more naturally than "byte
+1842"). The performance argument for byte-offset (`O(1)` seek vs
+`O(N)` line skip) doesn't matter at expected inbox sizes.
+
+### Why no daemon protocol bump
+
+The inbox lives entirely outside the daemon's protocol. Senders
+and readers `open()` the file directly. The daemon's only
+involvement is *file lifecycle* — wiping `<name>.jsonl` and
+`<name>.cursor` at agent insert (clean slate against crash residue)
+and at agent remove / prune. That sits in `Registry::insert` /
+`Registry::remove` / `Registry::prune_dead` as best-effort `unlink`
+calls.
+
+### Why a hard 4000-byte per-line cap
+
+POSIX guarantees `O_APPEND` writes under `PIPE_BUF` (4096 on Linux)
+are atomic. Capping each encoded JSON Line at 4000 bytes (with
+~96-byte headroom for envelope + safety) lets the post path do a
+single `write_all` and leave atomicity to the kernel — no flock,
+no chunking, no reorder hazards. Messages over the cap are
+rejected with a clear error pointing at "split or pass a file
+path"; the alternative (silently chunking long messages) hides the
+boundary problem rather than surfacing it.
+
+### Why sender identity from env (with `--from` override)
+
+Same principle as item 18: self-identity flows through
+`$PSWARM_AGENT_NAME`. Driver Claudes (= sessions running pswarm
+without themselves being under pswarm) don't have that env, so
+they pass `--from <label>` explicitly. There is *no* auto-detection
+fallback to `$USER`, `$AI_AGENT`, or anything else — a label that
+the user picks beats one we infer, and survey at
+`docs/agent-tool-survey.md` confirmed there is no portable
+session-id env across agents anyway.
+
+### Why receiver-side silent no-op when env is unset
+
+If a Claude session loaded `pswarm inbox read --follow` via Monitor
+and `$PSWARM_AGENT_NAME` is missing (e.g. Claude wasn't spawned
+via pswarm), surfacing an error would clutter the conversation.
+Same reasoning as the `pswarm event` silent-no-op outside pswarm:
+the wrapper is meant to be a true no-op when there's no inbox to
+read.
+
+### Why no `<name>` argument on `read`
+
+Following the principle settled in item 18: external CLI face is
+self-only (env-driven), debug is `cat $XDG_STATE_HOME/picoswarm/
+inbox/<name>.jsonl`. Multi-reader scenarios (e.g. parent + agent
+both watching the same inbox) aren't required for MVP and would
+need per-reader cursor files anyway.
+
+### Reflection
+
+The inbox started in conversation as a "Monitor as receive box"
+sketch tied tightly to Claude Code. Walking through the design
+forced two corrections: (1) the file-cursor / file-jsonl layer
+generalises beyond Claude — non-Claude agents can poll the same
+files via plain `pswarm inbox read` at turn boundaries, so the
+primitive is agent-agnostic even if Monitor is currently
+Claude-only on the consumer side; (2) keeping the daemon out of
+message-passing state preserved the file-direct architecture we
+had landed on for `event` and the related cleanup sites, which in
+turn meant no protocol bump and no new daemon code beyond a few
+`unlink` calls. The inbox is the smallest primitive that lets two
+agents talk; the bigger questions (broadcast, topics, ack) are
+deferred until use forces them.
+

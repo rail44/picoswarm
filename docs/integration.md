@@ -95,6 +95,37 @@ end
 
 (Crude but illustrative. A real implementation would deduplicate so the same exit isn't notified repeatedly.)
 
+### Inter-agent messaging (`pswarm inbox`)
+
+Each agent has a per-name inbox at `$XDG_STATE_HOME/picoswarm/inbox/<name>.jsonl`. Senders post a single JSON line per message; the recipient agent (or any reader) tails the file and emits unread lines, advancing a sidecar `<name>.cursor` file (1-based line number). No daemon mediation — the files are touched directly, so `cat <inbox>.jsonl` works for debugging and message state survives daemon restarts.
+
+```sh
+# Send (from a pswarm-spawned agent — `from` auto-derived from $PSWARM_AGENT_NAME):
+pswarm inbox post bob "ready for review"
+
+# Send (from a driver Claude session not under pswarm — `--from` required):
+pswarm inbox post bob "kick-off prompt" --from driver
+
+# Read (from inside agent `bob`):
+pswarm inbox read              # one-shot drain
+pswarm inbox read --follow     # tail-style stream
+
+# Inspect raw history (debugging):
+cat $XDG_STATE_HOME/picoswarm/inbox/bob.jsonl
+```
+
+Each message is a JSON Line of the form `{"ts": <unix>, "from": "<sender>", "body": "<text>"}` — multi-line bodies are escaped via JSON. Encoded lines are capped at 4000 bytes so a single `O_APPEND` write stays atomic across concurrent senders.
+
+Wrap the receiver side in Claude Code's `Monitor` tool to fold messages into the conversation as they arrive:
+
+```
+Monitor("inbox", "pswarm inbox read --follow", persistent=true)
+```
+
+Each emitted line becomes a notification. The agent's own reasoning layer can parse the JSON and react (or ignore). For non-Claude agents, polling `pswarm inbox read` at turn boundaries is the equivalent — see `docs/agent-tool-survey.md` for which agents have a Monitor-equivalent.
+
+The inbox is wiped when the agent is removed (`pswarm rm`), pruned (`pswarm clean`), or re-spawned with the same name (clean slate against stale crash residue).
+
 ## Future hook contract (not yet implemented)
 
 If picoswarm ever absorbs an explicit hook — most likely use case: an agent itself wanting to launch another agent into a pane it doesn't own — the contract will be:

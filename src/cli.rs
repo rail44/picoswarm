@@ -123,10 +123,58 @@ pub enum Command {
         #[arg(num_args = 1..=2)]
         args: Vec<String>,
     },
+    /// Inter-agent message inbox (file-backed; no daemon mediation).
+    ///
+    /// Each agent has an append-only JSON Lines file at
+    /// `$XDG_STATE_HOME/picoswarm/inbox/<name>.jsonl`. `post` writes
+    /// one message; `read` emits unread messages, advancing a sidecar
+    /// `<name>.cursor` file. Multi-agent orchestration patterns can
+    /// wrap `pswarm inbox read --follow` in Claude Code's `Monitor`
+    /// tool to receive notifications mid-conversation; non-Claude
+    /// agents poll at turn boundaries.
+    Inbox {
+        #[command(subcommand)]
+        command: InboxCommand,
+    },
     /// Manage the picoswarm daemon lifecycle.
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum InboxCommand {
+    /// Post a message to an agent's inbox.
+    ///
+    /// Sender identity comes from `$PSWARM_AGENT_NAME` when set
+    /// (i.e. inside a pswarm-spawned agent), otherwise `--from
+    /// <label>` is required. The body may be passed as a positional
+    /// argument or piped in via stdin.
+    Post {
+        /// Recipient agent name.
+        #[arg(add = ArgValueCandidates::new(agent_name_candidates))]
+        to: String,
+        /// Message body. If omitted, read from stdin.
+        body: Option<String>,
+        /// Sender label. Defaults to `$PSWARM_AGENT_NAME`. Required
+        /// when running outside a pswarm-spawned agent (e.g. from a
+        /// driver Claude session that uses pswarm to orchestrate
+        /// other agents).
+        #[arg(long)]
+        from: Option<String>,
+    },
+    /// Read unread messages from the calling agent's inbox.
+    ///
+    /// The agent name is read from `$PSWARM_AGENT_NAME`; outside a
+    /// pswarm-spawned context the command exits 0 silently so
+    /// wrappers (e.g. Claude Code's `Monitor` tool on `pswarm inbox
+    /// read --follow`) do not error. With `--follow`, stays running
+    /// and streams new messages as they arrive (poll-based, ~100 ms).
+    Read {
+        /// Stay running and stream new messages as they arrive.
+        #[arg(long, short)]
+        follow: bool,
     },
 }
 

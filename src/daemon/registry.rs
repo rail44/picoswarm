@@ -21,6 +21,7 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::daemon::output_session::SessionInbox;
+use crate::paths;
 use crate::protocol::{AgentStatus, AgentSummary, Event};
 
 const GRACEFUL_TERMINATE_GRACE: Duration = Duration::from_secs(1);
@@ -103,11 +104,18 @@ impl Registry {
     }
 
     /// Insert a fresh entry. Returns Err if the name is already taken.
+    ///
+    /// Also clears any stale inbox files (`<name>.jsonl` /
+    /// `<name>.cursor`) left behind by a prior agent of the same
+    /// name that did not get cleaned up gracefully (e.g. daemon
+    /// crash). Best-effort: a delete failure is logged and ignored
+    /// — the inbox is informational, not load-bearing.
     pub fn insert(&self, entry: AgentEntry) -> Result<()> {
         let mut inner = self.lock_inner();
         if inner.by_name.contains_key(&entry.name) {
             return Err(anyhow!("name already in use: {}", entry.name));
         }
+        cleanup_inbox_files(&entry.name);
         let id = entry.id;
         inner.by_name.insert(entry.name.clone(), id);
         inner.by_id.insert(id, entry);
@@ -157,6 +165,7 @@ impl Registry {
             inner.by_id.remove(&id)?
         };
         terminate_entry(&entry, force);
+        cleanup_inbox_files(&entry.name);
         Some(entry)
     }
 
@@ -203,6 +212,7 @@ impl Registry {
         for id in dead_ids {
             if let Some(entry) = inner.by_id.remove(&id) {
                 inner.by_name.remove(&entry.name);
+                cleanup_inbox_files(&entry.name);
                 removed.push(entry.name);
             }
         }
@@ -272,5 +282,25 @@ fn send_sigkill(entry: &AgentEntry) {
         && let Err(e) = child.kill()
     {
         debug!("SIGKILL on pid {} failed: {e}", child.id());
+    }
+}
+
+/// Best-effort delete of `<name>.jsonl` and `<name>.cursor` from the
+/// inbox directory. Called both when a fresh agent is inserted (clean
+/// slate against stale crash residue) and when an existing one is
+/// removed/pruned. Failures are logged and ignored — the inbox is
+/// informational, not load-bearing.
+fn cleanup_inbox_files(name: &str) {
+    for path_fn in [paths::inbox_message_path, paths::inbox_cursor_path] {
+        match path_fn(name) {
+            Ok(p) => {
+                if let Err(e) = std::fs::remove_file(&p)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    debug!("inbox cleanup: remove {} failed: {e}", p.display());
+                }
+            }
+            Err(e) => debug!("inbox cleanup: resolve path for {name} failed: {e}"),
+        }
     }
 }
