@@ -3,3 +3,6 @@
 
 # Personal Claude Code overrides for this project
 .claude/settings.local.json
+
+# `claude --worktree <name>` puts working copies under here
+.claude/worktrees/

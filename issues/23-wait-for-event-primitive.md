@@ -1,7 +1,14 @@
 # Wait for an agent event programmatically
 
-- **Priority:** Medium
-- **Status:** Open
+- **Priority:** Low
+- **Status:** Reframed — the original "scripts littered with `sleep N`"
+  friction is resolvable today with `until <jq-on-pswarm-ls>; do
+  sleep 0.3; done` (or Claude Code's Bash `run_in_background` for
+  the same pattern). The remaining open question is whether to ship
+  a streaming `pswarm watch <name>` subcommand that pairs with
+  Claude Code's `Monitor` tool for multi-agent parallel-driving (one
+  stdout line per event). That is a different feature with a
+  different rationale — file as a fresh issue if it surfaces.
 
 ### Description
 

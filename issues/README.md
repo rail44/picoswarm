@@ -57,8 +57,6 @@ to actually pick one up is a separate decision.
 - ~~22 Attach UX on daemon restart~~ — resolved (`daemon stop|restart`
   refuses while clients are attached; `-f` to override; protocol
   bump 6→7)
-- [23 Wait for an agent event programmatically](23-wait-for-event-primitive.md)
-  — open (every dev-cycle script today over- or under-waits with `sleep N`)
 - [24 `pswarm send` of multi-line text does not submit](24-send-multiline-does-not-submit.md)
   — open (TUI raw-mode paste detection swallows the trailing CR)
 - [26 Hook firing observability](26-hook-firing-observability.md)
@@ -72,6 +70,10 @@ to actually pick one up is a separate decision.
 - [18 TUI view (`pswarm tui`) as a complementary view](18-tui-secondary-view.md)
   — deferred (revisit at 10+ agents regularly or when a watch-style
   refresh need emerges)
+- [23 Wait for an agent event programmatically](23-wait-for-event-primitive.md)
+  — reframed (the original friction is solved by an `until`-loop
+  pattern; only `pswarm watch` streaming for multi-agent driving
+  remains as a possible follow-up)
 - ~~19 Cross-host support~~ — rejected as out of scope
 - ~~20 Expose pswarm as an MCP server~~ — rejected (Bash-tool path is
   sufficient and MCP itself is in a plateau; revisit only if a real
