@@ -78,7 +78,7 @@ For per-session loading without a permanent install, `claude --plugin-dir /absol
 
 The plugin needs `$PSWARM_AGENT_NAME` to identify itself; the daemon sets that variable automatically in every spawned agent. Outside a `pswarm run`-spawned session the hook command silently exits 0, so installing the plugin into a normal Claude session is a no-op.
 
-Equivalents for other agents (Codex `notify`, Gemini `AfterAgent`, Cursor `stop`, Copilot `agentStop`, OpenCode `session.idle`, Aider `--notifications-command`) follow the same pattern — call `pswarm event self <event>` from the agent's hook surface — but no bundled config ships yet. See `docs/agent-hooks-survey.md` for the per-agent hook reference.
+Equivalents for other agents (Codex `notify`, Gemini `AfterAgent`, Cursor `stop`, Copilot `agentStop`, OpenCode `session.idle`, Aider `--notifications-command`) follow the same pattern — call `pswarm event <event>` from the agent's hook surface (`$PSWARM_AGENT_NAME` is read from the spawned environment) — but no bundled config ships yet. See `docs/agent-hooks-survey.md` for the per-agent hook reference.
 
 ### Notifications on agent exit (manual)
 

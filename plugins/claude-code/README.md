@@ -19,12 +19,12 @@ input of a session or a continuation. Scripts that want to drive an
 agent can therefore wait for `last_event=idle` after spawn without
 caring which hook produced it.
 
-The hooks invoke `pswarm event self <value>` directly — no shell
-glue. The literal `self` resolves the agent's name from
-`$PSWARM_AGENT_NAME`, which the daemon sets automatically when the
-agent is spawned by `pswarm run`. When the variable is absent (i.e.
-Claude was not launched by pswarm), the subcommand exits 0 silently
-so the plugin is a true no-op outside its intended environment.
+The hooks invoke `pswarm event <value>` directly — no shell glue.
+`pswarm event` reads the agent's name from `$PSWARM_AGENT_NAME`,
+which the daemon sets automatically when the agent is spawned by
+`pswarm run`. When the variable is absent (i.e. Claude was not
+launched by pswarm), the subcommand exits 0 silently so the plugin
+is a true no-op outside its intended environment.
 
 ## Install
 

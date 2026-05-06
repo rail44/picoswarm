@@ -98,23 +98,22 @@ pub enum Command {
         #[arg(add = ArgValueCandidates::new(agent_name_candidates))]
         name: String,
     },
-    /// Record a lifecycle event for an agent.
+    /// Record a lifecycle event for the calling agent.
     ///
     /// Used by hooks running in the agent's environment to signal
     /// `idle` (turn complete, ready for input), `attention` (needs
     /// human input out-of-band, e.g. permission prompt), or `exit`
     /// (session ending). The bundled Claude Code plugin under
-    /// `plugins/claude-code/` wires Claude's `Stop`, `Notification`,
-    /// and `SessionEnd` hooks into this command.
+    /// `plugins/claude-code/` wires Claude's `SessionStart`, `Stop`,
+    /// `Notification`, and `SessionEnd` hooks into this command.
     ///
-    /// Pass `self` as the agent name to resolve it from
-    /// `$PSWARM_AGENT_NAME` (set automatically by `pswarm run`):
-    /// `pswarm event self idle`.
+    /// The agent name is read from `$PSWARM_AGENT_NAME` (set
+    /// automatically by `pswarm run`); when the variable is unset the
+    /// command silently exits 0, so the bundled plugin is a true
+    /// no-op outside a pswarm-spawned session. To inject an event
+    /// for a specific agent during debug, override the env:
+    /// `PSWARM_AGENT_NAME=foo pswarm event idle`.
     Event {
-        /// Target agent name, or the literal `self` to resolve from
-        /// `$PSWARM_AGENT_NAME`.
-        #[arg(add = ArgValueCandidates::new(agent_name_candidates))]
-        name: String,
         /// The lifecycle event to record.
         #[arg(value_enum)]
         event: Event,

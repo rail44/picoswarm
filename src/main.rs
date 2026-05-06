@@ -62,9 +62,9 @@ fn main() -> anyhow::Result<()> {
             init_client_tracing();
             client_runtime().block_on(client::view::run(name))
         }
-        cli::Command::Event { name, event } => {
+        cli::Command::Event { event } => {
             init_client_tracing();
-            client_runtime().block_on(client::event::run(name, event))
+            client_runtime().block_on(client::event::run(event))
         }
     }
 }

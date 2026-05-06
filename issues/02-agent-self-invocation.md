@@ -1,10 +1,15 @@
 # Agent self-invocation (env injection + send-to-self guard)
 
 - **Priority:** High
-- **Status:** Partially resolved (env injection done as part of the
-  `pswarm event --self` work — see `docs/decision-log.md` item 17).
-  Send-to-self guard and a dedicated `self` keyword for `attach` /
-  `cwd` etc. remain deferred.
+- **Status:** Resolved in shape (env injection landed for `pswarm
+  event` — `docs/decision-log.md` items 17 / 18). The dedicated
+  `self` keyword once envisioned for `attach` / `cwd` / `send` etc.
+  was abandoned: walking through use cases showed those commands
+  either don't have a meaningful self target (`attach`, `cwd` —
+  UNIX equivalents already exist) or should refuse self
+  (`send` — loop hazard). Self-driven commands now read identity
+  from `$PSWARM_AGENT_NAME` directly, no `self` keyword. The
+  send-to-self loop guard remains a small future task.
 
 ### Description
 

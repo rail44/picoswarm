@@ -686,13 +686,19 @@ scope as much as any explicit decision does.
 ### What we decided
 
 To detect "agent ready for next input" without scraping the TUI,
-picoswarm exposes a thin receiver — `pswarm event <name> <event>`
-(or `pswarm event self <event>` to resolve the name from
-`$PSWARM_AGENT_NAME`) — and asks the agent's own lifecycle hooks to
-call it. For Claude Code we ship the wiring as a real plugin bundle
+picoswarm exposes a thin receiver — `pswarm event <event>` — that
+reads the agent's name from `$PSWARM_AGENT_NAME` (injected by the
+daemon at spawn) and asks the agent's own lifecycle hooks to call
+it. For Claude Code we ship the wiring as a real plugin bundle
 (`plugins/claude-code/`, installable via `claude --plugin-dir`).
 For other agents, the equivalent is a one-line config snippet in
 `docs/integration.md`, not a bundled artifact.
+
+(Earlier revisions of this entry described `pswarm event <name> <event>`
+plus a `self` keyword that triggered env resolution and silent
+no-op semantics. That `self` keyword was removed in plugin v0.3.0
+once we settled on the principle "external CLI face = self-only,
+debug = env override" — see the inbox / `self` discussion below.)
 
 ### Why hooks rather than output scraping
 
@@ -736,12 +742,12 @@ The first cut shipped a `scripts/event.sh` that handled
 event self <event>`. Once that logic was identified, it was clearly
 all already inside our binary's natural responsibilities — agents
 already inherit the daemon's `PATH`, so `pswarm` is reliably callable
-from a hook. The plugin's `hooks.json` now invokes
-`pswarm event self <event>` directly, and the subcommand silently
-exits 0 when called with `self` outside a pswarm-spawned context (or
-when the daemon is unreachable, or returns NotFound). Hook callers
-get the right behaviour without a shell-script intermediary, and the
-plugin is reduced to a manifest + a `hooks.json`.
+from a hook. The plugin's `hooks.json` now invokes `pswarm event
+<event>` directly, and the subcommand silently exits 0 when
+`PSWARM_AGENT_NAME` is unset (or the daemon is unreachable, or
+returns NotFound). Hook callers get the right behaviour without a
+shell-script intermediary, and the plugin is reduced to a manifest
+plus a `hooks.json`.
 
 ### Closure of issue #02 (agent self-invocation, env injection)
 
@@ -765,4 +771,72 @@ the receiver itself doesn't change. The concrete-first move also
 made the env-injection prerequisite (issue #02) actionable —
 before this, we had no consumer that needed identity in env, so the
 issue stayed parked.
+
+## 18. Drop `self` from the user-facing CLI; env is the identity surface
+
+### What we decided
+
+Originally the `pswarm event` subcommand took
+`pswarm event <name|self> <event>`, where the literal `self` resolved
+the name from `$PSWARM_AGENT_NAME` and switched on best-effort
+silent-error semantics. Plugin v0.3.0 removes that argument
+entirely: `pswarm event <event>` always reads the agent name from
+`$PSWARM_AGENT_NAME`, exits 0 silently when the variable is unset,
+and delegates "I want to inject an event for an explicit name" to a
+shell-level env override (`PSWARM_AGENT_NAME=foo pswarm event idle`).
+
+This applies as a project-wide principle for any new commands that
+care about agent identity: the user-facing CLI takes a name only
+when targeting *another* agent (recipient of `send`, target of
+`attach`, target of an `inbox post`, etc.), and never uses a `self`
+sentinel. Self-targeting comes from env.
+
+### Why `self` was over-generalised
+
+Issue #02 originally framed `self` as a cross-subcommand convention
+that would extend to `attach self`, `send self`, `cwd self`, etc.
+Working through use cases:
+
+- `attach self` — meaningless; the agent already runs *inside* its
+  own PTY.
+- `cwd self` — UNIX `pwd` is the right answer.
+- `send self` — strictly send-to-self loops; should be refused, not
+  enabled.
+- `event self` — useful, but only as a *modal hint* that switched
+  semantics (env resolution + silent errors).
+- `inbox read self` — useful, same modal-hint flavour.
+
+In every "useful" case, the keyword wasn't selecting a target — it
+was switching to a different *behaviour mode* (env-driven + silent
+errors). Pushing that mode-switch into a subcommand argument
+overloads the slot. Letting the env presence drive the mode, and
+the CLI surface drive the subcommand contract, separates the two.
+
+### Why env override is enough for debug
+
+The "explicit-name event injection" use case (manual testing, fault
+injection) is rare and well-served by a shell idiom every developer
+already knows: prefix the env. No new subcommand surface, no
+discoverability cost beyond docs. The integration tests target the
+protocol directly (not the CLI), so they're unaffected.
+
+### Migration
+
+`plugins/claude-code/hooks/hooks.json` rewritten to call
+`pswarm event <event>` (no `self`); plugin version bumped 0.2.0 →
+0.3.0; `validate_name`'s reservation of `self` retained
+(forward-compatibility against re-introducing the keyword by
+accident, plus avoids "agent named self" confusion in `pswarm send`
+log lines).
+
+### Reflection
+
+The instinct that prompted `self` — "make the env-driven mode
+explicit at the CLI level so a reader of `hooks.json` can see what's
+happening" — wasn't wrong, just located in the wrong layer. The
+mode is a property of the *invocation context* (env present or
+absent), not of the *command*. Surfacing it as a keyword conflated
+the two and ate an argument slot that the principle "name argument
+= targeting another agent" should own. Removing it makes both the
+CLI grammar and the hook-config easier to read.
 

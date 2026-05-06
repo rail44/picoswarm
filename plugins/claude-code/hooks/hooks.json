@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pswarm event self idle",
+            "command": "pswarm event idle",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pswarm event self idle",
+            "command": "pswarm event idle",
             "timeout": 5
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pswarm event self attention",
+            "command": "pswarm event attention",
             "timeout": 5
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pswarm event self exit",
+            "command": "pswarm event exit",
             "timeout": 5
           }
         ]
