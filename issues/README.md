@@ -82,8 +82,10 @@ to actually pick one up is a separate decision.
 - [25 Protocol bumps require a manual daemon restart](25-protocol-mismatch-manual-restart.md)
   — open (one-time-per-bump cost; cryptic first error)
 - [27 `pswarm view` output is unreadable for humans](27-view-output-is-raw-vt.md)
-  — open (raw VT escapes are correct for the design but hostile to
-  ad-hoc inspection)
+  — reframed (the original "did the prompt get through?" friction is
+  obviated by the event-based workflow shipped in #24 + #26; the
+  remaining valid `view` use cases all want raw bytes, which is what
+  the implementation already returns)
 
 ## Template
 

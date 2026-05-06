@@ -1,7 +1,17 @@
 # `pswarm view` output is unreadable for humans
 
 - **Priority:** Low
-- **Status:** Open
+- **Status:** Reframed — the original "did the prompt get through?"
+  friction is obviated by the event-based workflow that landed via
+  #24 (multi-line `pswarm send` now submits cleanly in one call),
+  #26 (daemon logs every `pswarm event` arrival), and the `until <jq
+  on pswarm ls>; do sleep 0.3; done` wait pattern (see #23). The
+  remaining valid `pswarm view` use cases — capturing Claude's text
+  response programmatically, replaying a snapshot in a real
+  terminal, debugging render issues — all want raw bytes, which is
+  what the current implementation already returns. Add a `--text`
+  / VT-parser mode if those use cases sharpen and a consumer
+  appears.
 
 ### Description
 
