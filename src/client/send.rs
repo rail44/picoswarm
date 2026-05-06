@@ -43,6 +43,9 @@ pub async fn run(name: String, text: Option<String>) -> Result<()> {
         // the input box; the second CR is what actually submits it.
         // ~80 ms between writes is enough for the placeholder
         // transition to settle; below human noticeability.
+        // (Verified empirically: dropping the first CR leaves the
+        // placeholder un-landed and the second CR has nothing to
+        // submit.)
         let mut wrapped =
             Vec::with_capacity(trimmed.len() + PASTE_START.len() + PASTE_END.len() + 1);
         wrapped.extend_from_slice(PASTE_START);
