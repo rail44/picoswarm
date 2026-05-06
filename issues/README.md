@@ -57,8 +57,9 @@ to actually pick one up is a separate decision.
 - ~~22 Attach UX on daemon restart~~ — resolved (`daemon stop|restart`
   refuses while clients are attached; `-f` to override; protocol
   bump 6→7)
-- [24 `pswarm send` of multi-line text does not submit](24-send-multiline-does-not-submit.md)
-  — open (TUI raw-mode paste detection swallows the trailing CR)
+- ~~24 `pswarm send` of multi-line text does not submit~~ — resolved
+  (wrap multi-line payloads in bracketed-paste markers so the trailing
+  CR lands outside the paste and reads as Enter)
 - [26 Hook firing observability](26-hook-firing-observability.md)
   — open (silent failures in plugin hooks surface only via agent-side
   `--debug-file` logs)
