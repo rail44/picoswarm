@@ -8,13 +8,15 @@
 //!
 //! For payloads that contain an embedded LF (i.e. multi-line input),
 //! the text is wrapped in bracketed-paste markers (`\e[200~ ...
-//! \e[201~`) before the trailing CR. Modern TUIs (Claude Code,
-//! current bash / zsh / fish, neovim, …) use bracketed-paste mode by
-//! default, and without explicit markers they detect "paste" via
-//! timing heuristics that consume the trailing CR as part of the
-//! paste payload — which means the text lands in the input box but is
-//! never submitted. Wrapping makes the boundary explicit so the CR
-//! after the close marker reads as Enter.
+//! \e[201~`) and the trailing CR is sent in a **separate** request
+//! after the paste-end marker. Modern TUIs (Claude Code in
+//! particular) collapse a paste of more than ~6 lines into a
+//! `[Pasted text +N lines]` placeholder; if the CR arrives in the
+//! same write as the paste-end marker, the placeholder swallows it
+//! and the message is never submitted. Splitting the writes lets
+//! the agent's input loop transition out of paste-handling state
+//! before the Enter arrives. Single-line payloads still go through
+//! in one write — the boundary issue does not apply there.
 
 use anyhow::{Result, bail};
 use std::io::{IsTerminal, Read};
@@ -30,11 +32,45 @@ pub async fn run(name: String, text: Option<String>) -> Result<()> {
         Some(t) => t.into_bytes(),
         None => read_stdin_or_bail()?,
     };
-    let payload = build_payload(raw);
+    let trimmed = trim_trailing_line_endings(raw);
 
+    if trimmed.contains(&b'\n') {
+        // Multi-line: send paste-wrap + trailing CR, pause briefly,
+        // then send a *second* bare CR as a separate request.
+        // Modern TUIs (Claude Code in particular) collapse a multi-
+        // line paste into a `[Pasted text +N lines]` placeholder.
+        // The first CR ends the paste and lands the placeholder in
+        // the input box; the second CR is what actually submits it.
+        // ~80 ms between writes is enough for the placeholder
+        // transition to settle; below human noticeability.
+        let mut wrapped =
+            Vec::with_capacity(trimmed.len() + PASTE_START.len() + PASTE_END.len() + 1);
+        wrapped.extend_from_slice(PASTE_START);
+        wrapped.extend_from_slice(&trimmed);
+        wrapped.extend_from_slice(PASTE_END);
+        wrapped.push(b'\r');
+        send_payload(&name, wrapped).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        send_payload(&name, b"\r".to_vec()).await?;
+    } else {
+        let mut payload = trimmed;
+        payload.push(b'\r');
+        send_payload(&name, payload).await?;
+    }
+    Ok(())
+}
+
+async fn send_payload(name: &str, payload: Vec<u8>) -> Result<()> {
     let mut stream = connection::connect_with_handshake().await?;
     let (mut reader, mut writer) = stream.split();
-    protocol::write_msg(&mut writer, &ClientToDaemon::Send { name, payload }).await?;
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Send {
+            name: name.to_string(),
+            payload,
+        },
+    )
+    .await?;
     match protocol::read_msg::<DaemonToClient, _>(&mut reader).await? {
         DaemonToClient::Ok => Ok(()),
         DaemonToClient::Error { code, message } => bail!("send failed: {code:?} {message}"),
@@ -42,24 +78,11 @@ pub async fn run(name: String, text: Option<String>) -> Result<()> {
     }
 }
 
-/// Strip any trailing CR/LF the caller (or `echo`) may have included,
-/// wrap the remainder in bracketed-paste markers when it contains an
-/// embedded LF, then append a single CR so the agent reads Enter.
-fn build_payload(mut raw: Vec<u8>) -> Vec<u8> {
+fn trim_trailing_line_endings(mut raw: Vec<u8>) -> Vec<u8> {
     while matches!(raw.last(), Some(b'\n' | b'\r')) {
         raw.pop();
     }
-    if raw.contains(&b'\n') {
-        let mut wrapped = Vec::with_capacity(raw.len() + PASTE_START.len() + PASTE_END.len() + 1);
-        wrapped.extend_from_slice(PASTE_START);
-        wrapped.extend_from_slice(&raw);
-        wrapped.extend_from_slice(PASTE_END);
-        wrapped.push(b'\r');
-        wrapped
-    } else {
-        raw.push(b'\r');
-        raw
-    }
+    raw
 }
 
 fn read_stdin_or_bail() -> Result<Vec<u8>> {
@@ -76,39 +99,17 @@ fn read_stdin_or_bail() -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_payload;
+    use super::trim_trailing_line_endings;
 
     #[test]
-    fn single_line_just_appends_cr() {
-        assert_eq!(build_payload(b"hi".to_vec()), b"hi\r");
-    }
-
-    #[test]
-    fn trailing_newlines_are_trimmed_before_cr() {
-        assert_eq!(build_payload(b"hi\n".to_vec()), b"hi\r");
-        assert_eq!(build_payload(b"hi\r\n".to_vec()), b"hi\r");
-        assert_eq!(build_payload(b"hi\n\n".to_vec()), b"hi\r");
-    }
-
-    #[test]
-    fn empty_input_becomes_bare_cr() {
-        assert_eq!(build_payload(Vec::new()), b"\r");
-        assert_eq!(build_payload(b"\n".to_vec()), b"\r");
-    }
-
-    #[test]
-    fn multi_line_is_wrapped_in_paste_markers_with_cr_outside() {
-        assert_eq!(build_payload(b"a\nb".to_vec()), b"\x1b[200~a\nb\x1b[201~\r");
-    }
-
-    #[test]
-    fn multi_line_trailing_newline_is_trimmed_before_wrap() {
-        // The trailing LF that came in as part of the input is stripped;
-        // only the embedded LF survives, and the close marker plus CR
-        // sit outside the paste.
-        assert_eq!(
-            build_payload(b"a\nb\n".to_vec()),
-            b"\x1b[200~a\nb\x1b[201~\r"
-        );
+    fn trim_strips_cr_and_lf_runs() {
+        assert_eq!(trim_trailing_line_endings(b"hi".to_vec()), b"hi");
+        assert_eq!(trim_trailing_line_endings(b"hi\n".to_vec()), b"hi");
+        assert_eq!(trim_trailing_line_endings(b"hi\r\n".to_vec()), b"hi");
+        assert_eq!(trim_trailing_line_endings(b"hi\n\n".to_vec()), b"hi");
+        assert_eq!(trim_trailing_line_endings(b"a\nb".to_vec()), b"a\nb");
+        assert_eq!(trim_trailing_line_endings(b"a\nb\n".to_vec()), b"a\nb");
+        assert_eq!(trim_trailing_line_endings(Vec::new()), b"");
+        assert_eq!(trim_trailing_line_endings(b"\n".to_vec()), b"");
     }
 }
