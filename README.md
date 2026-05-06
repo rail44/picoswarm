@@ -93,6 +93,12 @@ Tracing output is rotated daily at
 A small `daemon.crash.log` next to it captures stdout / stderr from
 the daemonized process — typically empty unless the daemon panics.
 
+Hook / plugin events go through this log too: every `pswarm event`
+arrival is recorded (success at `debug!`, rejection at `warn!`), so
+when a plugin's hook seems silent, `tail -f` of the daily log is the
+first place to look. Pass `RUST_LOG=picoswarm=debug` to the daemon
+process to see the success path as well.
+
 ## Build
 
 ```

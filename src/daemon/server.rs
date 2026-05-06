@@ -314,13 +314,23 @@ async fn handle_oneshot(
 }
 
 fn handle_event(registry: &Registry, name: &str, event: Event) -> DaemonToClient {
+    // Tracing here is the diagnostic surface for plugin / hook
+    // wiring: silent failures in the hook script (intentionally
+    // swallowed by `pswarm event self`) are otherwise invisible.
+    // `debug!` keeps the success path quiet at the default log
+    // level; `warn!` makes the rejection visible without tweaking
+    // RUST_LOG.
     registry.lookup(name).map_or_else(
-        || DaemonToClient::Error {
-            code: ErrorCode::NotFound,
-            message: format!("no agent named {name}"),
+        || {
+            warn!(agent = %name, ?event, "event for unknown agent");
+            DaemonToClient::Error {
+                code: ErrorCode::NotFound,
+                message: format!("no agent named {name}"),
+            }
         },
         |entry| {
             entry.record_event(event);
+            debug!(agent = %name, ?event, "event recorded");
             DaemonToClient::Ok
         },
     )

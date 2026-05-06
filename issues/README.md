@@ -60,9 +60,9 @@ to actually pick one up is a separate decision.
 - ~~24 `pswarm send` of multi-line text does not submit~~ — resolved
   (wrap multi-line payloads in bracketed-paste markers so the trailing
   CR lands outside the paste and reads as Enter)
-- [26 Hook firing observability](26-hook-firing-observability.md)
-  — open (silent failures in plugin hooks surface only via agent-side
-  `--debug-file` logs)
+- ~~26 Hook firing observability~~ — resolved (daemon now logs every
+  `pswarm event` arrival: `debug!` on success, `warn!` on rejection,
+  rotated daily log file is the diagnostic surface)
 - [28 Forward agent permission prompts without an attach](28-permission-prompt-forwarding.md)
   — open (detached drivers stall the moment any agent asks a question)
 
