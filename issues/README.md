@@ -57,6 +57,15 @@ to actually pick one up is a separate decision.
 - ~~22 Attach UX on daemon restart~~ — resolved (`daemon stop|restart`
   refuses while clients are attached; `-f` to override; protocol
   bump 6→7)
+- [23 Wait for an agent event programmatically](23-wait-for-event-primitive.md)
+  — open (every dev-cycle script today over- or under-waits with `sleep N`)
+- [24 `pswarm send` of multi-line text does not submit](24-send-multiline-does-not-submit.md)
+  — open (TUI raw-mode paste detection swallows the trailing CR)
+- [26 Hook firing observability](26-hook-firing-observability.md)
+  — open (silent failures in plugin hooks surface only via agent-side
+  `--debug-file` logs)
+- [28 Forward agent permission prompts without an attach](28-permission-prompt-forwarding.md)
+  — open (detached drivers stall the moment any agent asks a question)
 
 ### Low (only when requirements firm up)
 
@@ -67,26 +76,56 @@ to actually pick one up is a separate decision.
 - ~~20 Expose pswarm as an MCP server~~ — rejected (Bash-tool path is
   sufficient and MCP itself is in a plateau; revisit only if a real
   cross-vendor consumer surfaces)
+- [25 Protocol bumps require a manual daemon restart](25-protocol-mismatch-manual-restart.md)
+  — open (one-time-per-bump cost; cryptic first error)
+- [27 `pswarm view` output is unreadable for humans](27-view-output-is-raw-vt.md)
+  — open (raw VT escapes are correct for the design but hostile to
+  ad-hoc inspection)
 
 ## Template
 
-New issues should follow this template:
+New issues should follow this template. Sections expand as the issue
+moves through states — file the *why* first, then the *how* once it
+has been worked out.
 
 ```markdown
 # <Title>
 
 - **Priority:** <High | Medium | Low>
+- **Status:** <Open | Deferred | In progress | …>
 
 ### Description
 
 - **Summary:** brief framing of the problem
 - **Impact:** what improves / what we lose by not doing this
-- **Proposed Solutions:**
+
+### Symptoms observed
+
+- concrete examples of the friction in actual use
+- (optional but valuable for "pain first, approach later" issues)
+
+### Approaches considered
+
+- TBD when the issue is filed for the pain only
+- otherwise, a list of candidate implementations with trade-offs:
   1. **<approach name>** (size/difficulty): description and tradeoff
   2. **<approach name>** ...
-- **References:**
-  - related code `path/to/file.rs:LL`
-  - related docs `docs/...`
-  - external links
-  - related issues: #NN
+
+### References
+
+- related code `path/to/file.rs:LL`
+- related docs `docs/...`
+- external links
+- related issues: #NN
 ```
+
+In practice issues land in one of two shapes:
+
+- **Pain first.** The friction is concrete and reproducible, but the
+  right shape of the fix is open. File with `Approaches considered:
+  TBD`; flesh out before implementing.
+- **Approach in hand.** The path is clear but the work is blocked on
+  something else. File with the candidate approaches up front so the
+  next person can pick one up directly.
+
+Either shape is fine — the index just tracks what's open.
