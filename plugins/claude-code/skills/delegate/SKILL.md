@@ -148,40 +148,62 @@ The parent and child talk over `pswarm inbox`, an append-only JSON Lines
 file per agent at `$XDG_STATE_HOME/picoswarm/inbox/<name>.jsonl` with a
 sidecar `<name>.cursor` tracking the reader's position.
 
-### Arm the child as a receiver
+### Arm the child as a receiver — by including the instruction in the brief
 
-The child's first action — before doing real work — should be to subscribe
-to its own inbox via `Monitor`:
+The child has no awareness of the inbox until *the parent's brief tells it
+to use one*. The parent does not have a side-channel to make the child
+arm `Monitor`; this happens because the brief itself starts with that
+instruction. Make the **first concrete step** of every brief look like:
 
-```
-Monitor("inbox messages from parent",
-        "pswarm inbox read --follow",
-        persistent=true)
-```
+> "First, use the Monitor tool with these arguments — description: 'inbox
+> messages from parent', command: `pswarm inbox read --follow`,
+> persistent: true. Acknowledge briefly when armed, then proceed."
 
-Each line written by the parent arrives in the child as a notification of
-the form `{"ts":..., "from":"parent", "body":"..."}`. The child's
-reasoning layer parses the JSON and reacts (or ignores). When
-`$PSWARM_AGENT_NAME` is unset (i.e. the child happens to be running
+Once the child runs that, each line the parent posts to the child's inbox
+arrives as a notification of the form `{"ts":..., "from":"<label>",
+"body":"..."}` — the child's reasoning layer parses the JSON and reacts.
+When `$PSWARM_AGENT_NAME` is unset (i.e. the child happens to be running
 *outside* pswarm), `pswarm inbox read` silently no-ops, so the same
 Monitor command is safe to run unconditionally.
 
-Note: this Monitor pattern is **Claude-Code-specific**. Other CLI agents
+This Monitor pattern is **Claude-Code-specific**. Other CLI agents
 (Codex, Gemini, Cursor, Copilot, OpenCode, Aider) do not surface
 background-process stdout as in-conversation events; they would have to
 poll `pswarm inbox read` at turn boundaries. See
 `docs/agent-tool-survey.md` for the full picture.
 
+### Receive on the parent side
+
+The parent (the driver) also wants to know when the child posts back. The
+parent picks an arbitrary label for itself — `driver`, `parent`, or
+something task-specific like `feature-x-orchestrator` — and arms its own
+Monitor on that label's inbox:
+
+```
+Monitor("inbox replies from <child-name>",
+        "PSWARM_AGENT_NAME=driver pswarm inbox read --follow",
+        persistent=true)
+```
+
+The env-override is needed because the parent isn't a pswarm-spawned
+agent and has no `$PSWARM_AGENT_NAME` of its own. The label (`driver`
+above) is whatever the parent decides — there is no registry, no
+collision check; posting to a non-existent inbox simply creates the file
+on first write. Pass the chosen label to the child in the brief so the
+child knows where to post replies.
+
 ### Parent posts to the child
 
 From outside pswarm (driver Claude session) — `--from` is required
-because there's no `$PSWARM_AGENT_NAME` to derive from:
+because there's no `$PSWARM_AGENT_NAME` to derive from. The label is
+free-form; pick the same one used for the parent's Monitor above:
 
 ```sh
-pswarm inbox post <child-name> "<message>" --from <label>
+pswarm inbox post <child-name> "<message>" --from driver
 ```
 
-From inside another pswarm-spawned agent — `from` is auto-filled:
+From inside another pswarm-spawned agent — `from` is auto-filled with
+that agent's `$PSWARM_AGENT_NAME`:
 
 ```sh
 pswarm inbox post <child-name> "<message>"
@@ -189,11 +211,15 @@ pswarm inbox post <child-name> "<message>"
 
 ### Child posts back to the parent
 
-The child sends to the parent's inbox the same way. If the parent is a
-driver Claude (no `$PSWARM_AGENT_NAME`), the parent's inbox is named
-whatever the parent picks for itself — pass that name to the child as
-part of the brief, e.g. "post status updates to `pswarm inbox post driver
-... --from <yourname>`".
+The brief tells the child what label the parent uses. The child then
+posts to that label's inbox the same way:
+
+```sh
+pswarm inbox post driver "draft ready at <path>" --from <child-name>
+```
+
+Inbox files are created lazily on first write, so neither the parent's
+inbox nor the child's needs to be pre-registered.
 
 ### Inbox vs `pswarm send`
 
@@ -229,9 +255,9 @@ Typical end-of-task sequence:
 1. Child finishes its work, writes output(s) to a path the brief
    specified.
 2. Child posts `done` (or a structured payload) to the parent's inbox.
-3. Parent (notified via its own Monitor on its inbox, or on the child's
-   `last_event` flipping to `idle`) reads the output, validates it,
-   and integrates.
+3. Parent (notified by its own Monitor on its inbox — see "Receive on
+   the parent side" above) reads the output, validates it, and
+   integrates.
 4. Parent commits if the work warrants a commit. **Do not have the child
    commit** unless the user explicitly asked — review-then-commit is
    the parent's job.
@@ -244,6 +270,63 @@ Typical end-of-task sequence:
    This deletes the agent process, its inbox JSONL, and its cursor file
    (clean slate against stale residue). For multi-step work, leave the
    child running and continue dispatching tasks instead.
+
+   Note: spawning a fresh agent under the same `<name>` also wipes any
+   leftover inbox files for that name (clean-slate guarantee against
+   stale residue from a prior crash). Pre-seeding messages by posting
+   to a future child's inbox before `pswarm run` therefore does *not*
+   work — the post will be cleared at spawn.
+
+## Concrete walkthrough
+
+End-to-end flow for "delegate a small task to a fresh child Claude,
+collect the result". This is the minimal pattern; everything above is
+this trace expanded.
+
+The driver Claude (parent) executes:
+
+```sh
+# 1. Spawn the child.
+pswarm run -d worker -- claude
+
+# 2. Wait for SessionStart -> idle (run from the parent's Bash with
+#    run_in_background so the parent turn is not blocked):
+until pswarm ls --json \
+    | jq -e '.[] | select(.name=="worker") | .last_event.event=="idle"' \
+        >/dev/null 2>&1; do
+    sleep 0.3
+done
+
+# 3. Arm the parent's own inbox receiver (Monitor invocation, not
+#    Bash) — pick a label, e.g. `driver`:
+#
+#    Monitor(description="inbox replies from worker",
+#            command="PSWARM_AGENT_NAME=driver pswarm inbox read --follow",
+#            persistent=true)
+
+# 4. Brief the child. The brief instructs the child to arm its own
+#    Monitor first, then do the work, then post `done`:
+pswarm send worker "First, use the Monitor tool with description: 'inbox messages from parent', command: 'pswarm inbox read --follow', persistent: true. Acknowledge briefly when armed.
+
+Then read CLAUDE.md and src/foo.rs:42, change the function to return Result<()>, run \`cargo test\`, and write a unit-diff to /tmp/foo.patch.
+
+When done, post via: pswarm inbox post driver \"done at /tmp/foo.patch\" --from worker"
+
+# 5. (asynchronously) parent's Monitor delivers a notification when
+#    the child posts back. Parent reads /tmp/foo.patch, validates, and
+#    integrates.
+
+# 6. (optional) Parent posts review feedback or "ship it":
+pswarm inbox post worker "looks good, ship it" --from driver
+
+# 7. Cleanup:
+pswarm rm worker
+```
+
+The walkthrough is intentionally bare; in practice the brief is longer,
+the validation is more thorough, and the parent may iterate with
+several inbox round-trips before final integration. The shape is the
+same.
 
 ## Common pitfalls
 
@@ -289,6 +372,17 @@ spending time debugging.
 - **Forgetting `--from` from a driver session.** `pswarm inbox post`
   outside a pswarm-spawned agent has no `$PSWARM_AGENT_NAME` to derive
   from and will reject the post. Pass `--from <label>` explicitly.
+
+- **`attention` arrives before `idle`.** The `until last_event=="idle"`
+  loop will not exit if the child fires `attention` first (e.g. a
+  permission prompt at startup before any turn completes). If the
+  child is configured to ask for permissions on launch, either widen
+  the filter (`select(.event=="idle" or .event=="attention")`), wrap
+  the loop in `timeout 30 sh -c '...'` so it gives up rather than
+  hanging, or use auto-mode for the child so the prompt does not
+  fire. The default plugin-loaded child fires `idle` first in
+  practice, so most callers will not hit this — but the loop has no
+  built-in timeout, so a misconfigured child can wedge the parent.
 
 - **Sending before ready.** Skipping the `last_event=idle` wait drops the
   briefing into the void. Always wait for `idle` after `pswarm run`
