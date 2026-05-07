@@ -101,9 +101,11 @@ Bash(run_in_background=true,
      command="until pswarm ls --json | jq -e '.[] | select(.name==\"<name>\") | .last_event.event==\"idle\"' >/dev/null 2>&1; do sleep 0.3; done")
 ```
 
-Do **not** use `Monitor` for this — `Monitor` is for streams of events,
-not single readiness signals; the `until`-loop exits in seconds and emits
-exactly one notification.
+Do **not** use `Monitor` for this readiness wait — `Monitor` is the right
+tool when you want *every* line as a separate notification (the inbox
+case below). Readiness is a single one-shot signal, so a `Bash`
+`run_in_background` loop that exits when the condition holds is the
+better fit; it emits exactly one completion notification and stops.
 
 ## Brief the child
 
@@ -159,9 +161,23 @@ instruction. Make the **first concrete step** of every brief look like:
 > messages from parent', command: `pswarm inbox read --follow`,
 > persistent: true. Acknowledge briefly when armed, then proceed."
 
+Note: `Monitor` is one of Claude Code's deferred tools. If the child does
+not already have its schema loaded, it will need to fetch it via
+`ToolSearch` (`select:Monitor`) before the first call. The brief above
+phrases the request in plain prose so the child can resolve the schema
+itself — do not paste a literal `Monitor(...)` call expression into the
+brief, since the exact invocation shape depends on the child's tool
+loadout at that moment.
+
 Once the child runs that, each line the parent posts to the child's inbox
-arrives as a notification of the form `{"ts":..., "from":"<label>",
-"body":"..."}` — the child's reasoning layer parses the JSON and reacts.
+arrives as a notification of the form
+`{"ts":<unix>,"from":"<label>","body":"<text>"}`. The child sees this as
+the body of a system-emitted notification (not a user message), parses
+the JSON, and decides what to do. A useful brief tells the child *what*
+each notification means in this task — for example: "When you receive a
+notification with `body == 'ship it'` or `body == 'approved'`, you are
+done; otherwise treat the body as review feedback and iterate."
+
 When `$PSWARM_AGENT_NAME` is unset (i.e. the child happens to be running
 *outside* pswarm), `pswarm inbox read` silently no-ops, so the same
 Monitor command is safe to run unconditionally.
@@ -177,12 +193,12 @@ poll `pswarm inbox read` at turn boundaries. See
 The parent (the driver) also wants to know when the child posts back. The
 parent picks an arbitrary label for itself — `driver`, `parent`, or
 something task-specific like `feature-x-orchestrator` — and arms its own
-Monitor on that label's inbox:
+`Monitor` on that label's inbox. (Same deferred-tool note as above:
+fetch Monitor's schema via `ToolSearch select:Monitor` first if the
+parent does not have it.) The shell command Monitor wraps is:
 
-```
-Monitor("inbox replies from <child-name>",
-        "PSWARM_AGENT_NAME=driver pswarm inbox read --follow",
-        persistent=true)
+```sh
+PSWARM_AGENT_NAME=driver pswarm inbox read --follow
 ```
 
 The env-override is needed because the parent isn't a pswarm-spawned
@@ -191,6 +207,12 @@ above) is whatever the parent decides — there is no registry, no
 collision check; posting to a non-existent inbox simply creates the file
 on first write. Pass the chosen label to the child in the brief so the
 child knows where to post replies.
+
+**Pick a unique label per concurrent driver.** Two parent sessions both
+choosing `driver` would share an inbox file and see each other's
+messages. For task-specific orchestrations, use a discriminating label
+(`<feature>-orchestrator`, `<sessionid>-driver`, etc.). For simple
+one-driver-at-a-time work, `driver` is fine.
 
 ### Parent posts to the child
 
@@ -297,12 +319,12 @@ until pswarm ls --json \
     sleep 0.3
 done
 
-# 3. Arm the parent's own inbox receiver (Monitor invocation, not
-#    Bash) — pick a label, e.g. `driver`:
+# 3. Arm the parent's own inbox receiver. This is a Monitor call (not
+#    Bash). Picked label: `driver`. The shell command Monitor wraps is:
 #
-#    Monitor(description="inbox replies from worker",
-#            command="PSWARM_AGENT_NAME=driver pswarm inbox read --follow",
-#            persistent=true)
+#      PSWARM_AGENT_NAME=driver pswarm inbox read --follow
+#
+#    description: "inbox replies from worker", persistent: true.
 
 # 4. Brief the child. The brief instructs the child to arm its own
 #    Monitor first, then do the work, then post `done`:
@@ -372,6 +394,14 @@ spending time debugging.
 - **Forgetting `--from` from a driver session.** `pswarm inbox post`
   outside a pswarm-spawned agent has no `$PSWARM_AGENT_NAME` to derive
   from and will reject the post. Pass `--from <label>` explicitly.
+
+- **`pswarm` not on the child's `$PATH`.** The child inherits the
+  daemon's `$PATH`, so as long as the daemon was launched from a shell
+  where `pswarm` was on `$PATH`, the child will see the same. If the
+  child cannot find the binary (e.g. the daemon was spawned out of a
+  different login session), inbox posts from the child will fail
+  silently. Verify with `pswarm send <child> 'which pswarm'` and
+  `pswarm view <child>` if in doubt.
 
 - **`attention` arrives before `idle`.** The `until last_event=="idle"`
   loop will not exit if the child fires `attention` first (e.g. a
