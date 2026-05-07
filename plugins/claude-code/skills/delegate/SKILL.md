@@ -90,14 +90,35 @@ sending. Briefs that ask the child to "propose 2-3 options" produce
 output too low-precision to merge cleanly; resolve uncertainty before
 dispatching, not by delegating it.
 
-A working brief shape, including the inbox handshake (next section):
+**Have the child review the brief before working.** Even a carefully
+written brief usually has a gap visible only to a reader who isn't the
+author. Build a one-round review handshake into the brief itself: the
+child reads the brief with fresh eyes, posts any clarifying questions
+back to the parent's inbox, waits for answers, *then* starts. If
+nothing is unclear, the child posts a brief "starting" ack and
+proceeds. This catches ambiguity when fixing it is cheap (one inbox
+round-trip) instead of after the child has produced something
+mis-aimed.
+
+A working brief shape, including the inbox handshake and review step:
 
 ```
 First, use the Monitor tool with description: "inbox messages from
 parent", command: "pswarm inbox read --follow", persistent: true.
 Acknowledge briefly when armed.
 
-Then <read X, edit Y to do Z, run V to validate, write output to
+Then read the rest of this brief carefully, as if you have no prior
+context (you don't). If any acceptance criterion, file path, or
+instruction is ambiguous, post your clarifying questions to the
+parent and wait for the reply before starting:
+
+  pswarm inbox post driver "Q: <questions>" --from <name>
+
+If everything is clear, post a brief "starting" ack and proceed:
+
+  pswarm inbox post driver "starting" --from <name>
+
+Work: <read X, edit Y to do Z, run V to validate, write output to
 <path>>.
 
 When done, post via: pswarm inbox post driver "done at <path>"
