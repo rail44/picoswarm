@@ -16,11 +16,11 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::daemon::output_session::{self, ChunkSender};
-use crate::daemon::registry::AgentEntry;
+use crate::daemon::registry::{AgentEntry, AgentKind};
 use crate::protocol::RunRequest;
 
 pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
-    validate_name(&req.name)?;
+    validate_agent_name(&req.name)?;
 
     let (pty, pts) = open().context("openpty failed")?;
     pty.resize(Size::new(req.initial_size.rows, req.initial_size.cols))
@@ -106,15 +106,17 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
     Ok(AgentEntry {
         id: agent_id,
         name: req.name,
-        cwd: req.cwd,
         created_at: now_unix(),
-        pty,
-        child,
-        write_lock,
-        inbox,
+        kind: AgentKind::Spawned {
+            pty,
+            child,
+            write_lock,
+            inbox,
+            cwd: req.cwd,
+        },
+        last_event: Arc::new(Mutex::new(None)),
         attached,
         dead,
-        last_event: Arc::new(Mutex::new(None)),
     })
 }
 
@@ -148,7 +150,11 @@ fn now_unix() -> i64 {
         .map_or(0, |d| d.as_secs().cast_signed())
 }
 
-fn validate_name(name: &str) -> Result<()> {
+/// Shared agent-name validation. Used both by `spawn_session` (PTY-backed
+/// `pswarm run`) and by the daemon server's `Register` handler. Names
+/// must be 1–64 chars, ASCII alphanumeric plus `.`, `_`, `-`, and not
+/// the reserved literal `self`.
+pub fn validate_agent_name(name: &str) -> Result<()> {
     let len = name.chars().count();
     if !(1..=64).contains(&len) {
         return Err(anyhow!("agent name must be 1-64 characters: {name}"));

@@ -27,38 +27,77 @@ use crate::protocol::{AgentStatus, AgentSummary, Event};
 const GRACEFUL_TERMINATE_GRACE: Duration = Duration::from_secs(1);
 const GRACEFUL_TERMINATE_POLL: Duration = Duration::from_millis(100);
 
+/// Per-agent state that depends on whether the entry owns a PTY.
+///
+/// `Spawned` carries everything tied to a live child process: the PTY
+/// handle, the `Child` for `try_wait` / `kill`, the writer mutex that
+/// serialises stdin chunks, the output session inbox that feeds attach
+/// and `view`, and the cwd the agent was started in.
+///
+/// `Registered` is the PTY-less form: the entry has an id, a name, and
+/// can record lifecycle events / receive inbox messages, but no child
+/// to forward bytes to. PTY-bound subcommands (`send`, `view`, `attach`,
+/// `cwd`) refuse `Registered` entries with `ErrorCode::NoPty`.
+#[derive(Clone)]
+pub enum AgentKind {
+    Spawned {
+        pty: Arc<Pty>,
+        child: Arc<Mutex<Child>>,
+        /// Serialises concurrent writers (attach stdin, send) so multi-byte
+        /// payloads don't interleave at the syscall level.
+        write_lock: Arc<Mutex<()>>,
+        inbox: SessionInbox,
+        cwd: Option<PathBuf>,
+    },
+    Registered,
+}
+
 #[derive(Clone)]
 pub struct AgentEntry {
     pub id: Uuid,
     pub name: String,
-    pub cwd: Option<PathBuf>,
     pub created_at: i64,
-    pub pty: Arc<Pty>,
-    pub child: Arc<Mutex<Child>>,
-    /// Serialises concurrent writers (attach stdin, send) so multi-byte
-    /// payloads don't interleave at the syscall level.
-    pub write_lock: Arc<Mutex<()>>,
-    pub inbox: SessionInbox,
-    pub attached: Arc<AtomicBool>,
-    pub dead: Arc<AtomicBool>,
+    pub kind: AgentKind,
     /// Most recent lifecycle event reported by the agent via `pswarm
     /// event`, alongside the unix timestamp of the report. The
     /// daemon never writes through this on its own — only the
     /// `ClientToDaemon::Event` handler does.
     pub last_event: Arc<Mutex<Option<(Event, i64)>>>,
+    pub attached: Arc<AtomicBool>,
+    pub dead: Arc<AtomicBool>,
 }
 
 impl AgentEntry {
+    /// Build a fresh `Registered` (PTY-less) entry.
+    pub fn registered(name: String) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            created_at: now_unix(),
+            kind: AgentKind::Registered,
+            last_event: Arc::new(Mutex::new(None)),
+            attached: Arc::new(AtomicBool::new(false)),
+            dead: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     pub fn summary(&self) -> AgentSummary {
+        let (status, cwd) = match &self.kind {
+            AgentKind::Spawned { cwd, .. } => {
+                let status = if self.dead.load(Ordering::Relaxed) {
+                    AgentStatus::Dead
+                } else {
+                    AgentStatus::Running
+                };
+                (status, cwd.clone())
+            }
+            AgentKind::Registered => (AgentStatus::Registered, None),
+        };
         AgentSummary {
             id: self.id,
             name: self.name.clone(),
-            status: if self.dead.load(Ordering::Relaxed) {
-                AgentStatus::Dead
-            } else {
-                AgentStatus::Running
-            },
-            cwd: self.cwd.clone(),
+            status,
+            cwd,
             created_at: self.created_at,
             last_event: self.last_event.lock().ok().and_then(|g| *g),
         }
@@ -69,9 +108,7 @@ impl AgentEntry {
     /// than an error: the field is purely informational, and a
     /// failed update never blocks the agent's actual work.
     pub fn record_event(&self, event: Event) {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs().cast_signed());
+        let now = now_unix();
         if let Ok(mut guard) = self.last_event.lock() {
             *guard = Some((event, now));
         }
@@ -137,9 +174,10 @@ impl Registry {
         let inner = self.lock_inner();
         let mut summaries: Vec<AgentSummary> = Vec::with_capacity(inner.by_id.len());
         for entry in inner.by_id.values() {
-            if !entry.dead.load(Ordering::Relaxed)
-                && let Ok(mut child) = entry.child.lock()
-                && let Ok(Some(_)) = child.try_wait()
+            if let AgentKind::Spawned { child, .. } = &entry.kind
+                && !entry.dead.load(Ordering::Relaxed)
+                && let Ok(mut guard) = child.lock()
+                && let Ok(Some(_)) = guard.try_wait()
             {
                 entry.dead.store(true, Ordering::Relaxed);
             }
@@ -156,6 +194,7 @@ impl Registry {
     /// child is still running. With `force = true`, skips the SIGTERM
     /// step and goes straight to SIGKILL. Blocks for up to the grace
     /// period; callers in async contexts should wrap in `spawn_blocking`.
+    /// `Registered` entries have no child, so termination is a no-op.
     pub fn remove(&self, name: &str, force: bool) -> Option<AgentEntry> {
         // Drop the registry lock before the (potentially second-long)
         // termination so other registry operations stay responsive.
@@ -175,36 +214,43 @@ impl Registry {
     pub fn shutdown_all(&self) {
         let mut inner = self.lock_inner();
         for (_, entry) in inner.by_id.drain() {
-            if let Ok(mut child) = entry.child.lock()
-                && let Err(e) = child.kill()
+            if let AgentKind::Spawned { child, .. } = &entry.kind
+                && let Ok(mut guard) = child.lock()
+                && let Err(e) = guard.kill()
             {
-                debug!("kill on shutdown failed for pid {}: {e}", child.id());
+                debug!("kill on shutdown failed for pid {}: {e}", guard.id());
             }
         }
         inner.by_name.clear();
     }
 
     /// Drop every registered agent whose process has exited. Returns the
-    /// names that were removed.
+    /// names that were removed. `Registered` entries are never swept by
+    /// this — they have no process to exit.
     pub fn prune_dead(&self) -> Vec<String> {
         let mut inner = self.lock_inner();
 
-        // First sweep: refresh `dead` flags for entries we haven't yet
-        // observed exit on.
+        // First sweep: refresh `dead` flags for spawned entries we
+        // haven't yet observed exit on.
         for entry in inner.by_id.values() {
-            if !entry.dead.load(Ordering::Relaxed)
-                && let Ok(mut child) = entry.child.lock()
-                && let Ok(Some(_)) = child.try_wait()
+            if let AgentKind::Spawned { child, .. } = &entry.kind
+                && !entry.dead.load(Ordering::Relaxed)
+                && let Ok(mut guard) = child.lock()
+                && let Ok(Some(_)) = guard.try_wait()
             {
                 entry.dead.store(true, Ordering::Relaxed);
             }
         }
 
-        // Second sweep: collect dead ids, then remove.
+        // Second sweep: collect dead ids, then remove. `Registered`
+        // entries' `dead` flag is never set, so they survive.
         let dead_ids: Vec<Uuid> = inner
             .by_id
             .iter()
-            .filter(|(_, entry)| entry.dead.load(Ordering::Relaxed))
+            .filter(|(_, entry)| {
+                matches!(entry.kind, AgentKind::Spawned { .. })
+                    && entry.dead.load(Ordering::Relaxed)
+            })
             .map(|(id, _)| *id)
             .collect();
 
@@ -219,9 +265,6 @@ impl Registry {
         removed
     }
 
-    /// Return the running PID of the agent named `name`, or None if the
-    /// agent doesn't exist or has no PID (e.g. the child handle reports
-    /// nothing on this platform).
     /// Names of agents that currently have a client attached. Used by
     /// the Shutdown handler to refuse non-forced shutdowns while users
     /// are mid-session.
@@ -234,23 +277,18 @@ impl Registry {
             .map(|e| e.name.clone())
             .collect()
     }
-
-    pub fn pid_of(&self, name: &str) -> Option<u32> {
-        let inner = self.lock_inner();
-        let id = inner.by_name.get(name)?;
-        let entry = inner.by_id.get(id)?;
-        let child = entry.child.lock().ok()?;
-        Some(child.id())
-    }
 }
 
 fn terminate_entry(entry: &AgentEntry, force: bool) {
-    let Some(pid) = entry.child.lock().ok().map(|c| c.id()) else {
+    let AgentKind::Spawned { child, .. } = &entry.kind else {
+        return;
+    };
+    let Some(pid) = child.lock().ok().map(|c| c.id()) else {
         return;
     };
 
     if force {
-        send_sigkill(entry);
+        send_sigkill(child);
         return;
     }
 
@@ -265,8 +303,8 @@ fn terminate_entry(entry: &AgentEntry, force: bool) {
     let deadline = Instant::now() + GRACEFUL_TERMINATE_GRACE;
     while Instant::now() < deadline {
         thread::sleep(GRACEFUL_TERMINATE_POLL);
-        if let Ok(mut child) = entry.child.lock()
-            && let Ok(Some(_)) = child.try_wait()
+        if let Ok(mut guard) = child.lock()
+            && let Ok(Some(_)) = guard.try_wait()
         {
             debug!("pid {pid} exited gracefully after SIGTERM");
             return;
@@ -274,14 +312,14 @@ fn terminate_entry(entry: &AgentEntry, force: bool) {
     }
 
     debug!("pid {pid} did not exit within grace period; sending SIGKILL");
-    send_sigkill(entry);
+    send_sigkill(child);
 }
 
-fn send_sigkill(entry: &AgentEntry) {
-    if let Ok(mut child) = entry.child.lock()
-        && let Err(e) = child.kill()
+fn send_sigkill(child: &Arc<Mutex<Child>>) {
+    if let Ok(mut guard) = child.lock()
+        && let Err(e) = guard.kill()
     {
-        debug!("SIGKILL on pid {} failed: {e}", child.id());
+        debug!("SIGKILL on pid {} failed: {e}", guard.id());
     }
 }
 
@@ -303,4 +341,10 @@ fn cleanup_inbox_files(name: &str) {
             Err(e) => debug!("inbox cleanup: resolve path for {name} failed: {e}"),
         }
     }
+}
+
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs().cast_signed())
 }

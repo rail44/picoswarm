@@ -11,6 +11,7 @@ pub mod doctor;
 pub mod event;
 pub mod inbox;
 pub mod ls;
+pub mod register;
 pub mod rm;
 pub mod run;
 pub mod send;

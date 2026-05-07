@@ -22,11 +22,19 @@ use tokio::sync::Notify;
 use tracing::{debug, info, warn};
 
 use crate::daemon::output_session::{SessionEvent, SubscribeReply};
-use crate::daemon::registry::{AgentEntry, Registry};
+use crate::daemon::registry::{AgentEntry, AgentKind, Registry};
 use crate::daemon::spawner::Spawner;
+use crate::daemon::validate_agent_name;
 use crate::protocol::{
     self, ClientToDaemon, DaemonToClient, ErrorCode, Event, PROTOCOL_VERSION, RunRequest, TermSize,
 };
+
+/// Message body returned for PTY-bound subcommands targeting a
+/// `Registered` (PTY-less) entry. Centralised so all four sites
+/// (`Send`, `View`, `Attach`, `GetCwd`) speak with one voice.
+fn no_pty_message(name: &str) -> String {
+    format!("{name} is a registered (PTY-less) agent; only `event`, `inbox`, and `rm` apply to it")
+}
 
 pub async fn run(socket_path: PathBuf, spawner: Spawner) -> Result<()> {
     if socket_path.exists() {
@@ -192,6 +200,10 @@ async fn handle_connection_inner(
     Ok(())
 }
 
+// Each match arm here is a tightly-scoped one-shot handler; the size
+// comes from counting them up, not from any single arm being large.
+// Splitting per-arm helpers would obscure the routing more than help.
+#[allow(clippy::too_many_lines)]
 async fn handle_oneshot(
     msg: ClientToDaemon,
     registry: &Registry,
@@ -234,25 +246,46 @@ async fn handle_oneshot(
             removed: registry.prune_dead(),
         },
 
-        ClientToDaemon::GetCwd { name } => registry.pid_of(&name).map_or_else(
-            || DaemonToClient::Error {
+        ClientToDaemon::GetCwd { name } => match registry.lookup(&name) {
+            Some(entry) => match &entry.kind {
+                AgentKind::Spawned { child, .. } => {
+                    let pid = child.lock().ok().map(|c| c.id());
+                    pid.map_or_else(
+                        || DaemonToClient::Error {
+                            code: ErrorCode::NotFound,
+                            message: format!("{name} has no live PID"),
+                        },
+                        |p| {
+                            let path = std::fs::read_link(format!("/proc/{p}/cwd")).ok();
+                            DaemonToClient::AgentCwd { path }
+                        },
+                    )
+                }
+                AgentKind::Registered => DaemonToClient::Error {
+                    code: ErrorCode::NoPty,
+                    message: no_pty_message(&name),
+                },
+            },
+            None => DaemonToClient::Error {
                 code: ErrorCode::NotFound,
-                message: format!("no agent named {name} (or it has no live PID)"),
+                message: format!("no agent named {name}"),
             },
-            |pid| {
-                let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok();
-                DaemonToClient::AgentCwd { path }
-            },
-        ),
+        },
 
         ClientToDaemon::View { name } => match registry.lookup(&name) {
-            Some(entry) => entry.inbox.snapshot().await.map_or_else(
-                || DaemonToClient::Error {
-                    code: ErrorCode::Internal,
-                    message: format!("session task for {name} is gone"),
+            Some(entry) => match &entry.kind {
+                AgentKind::Spawned { inbox, .. } => inbox.snapshot().await.map_or_else(
+                    || DaemonToClient::Error {
+                        code: ErrorCode::Internal,
+                        message: format!("session task for {name} is gone"),
+                    },
+                    DaemonToClient::Stdout,
+                ),
+                AgentKind::Registered => DaemonToClient::Error {
+                    code: ErrorCode::NoPty,
+                    message: no_pty_message(&name),
                 },
-                DaemonToClient::Stdout,
-            ),
+            },
             None => DaemonToClient::Error {
                 code: ErrorCode::NotFound,
                 message: format!("no agent named {name}"),
@@ -261,33 +294,42 @@ async fn handle_oneshot(
 
         ClientToDaemon::Event { name, event } => handle_event(registry, &name, event),
 
+        ClientToDaemon::Register { name } => handle_register(registry, &name),
+
         ClientToDaemon::Send { name, payload } => match registry.lookup(&name) {
-            Some(entry) => {
-                // Write on the blocking pool; the PTY writer is std::io,
-                // and we don't want to stall the async runtime.
-                let result = tokio::task::spawn_blocking(move || {
-                    let _guard = entry
-                        .write_lock
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("write lock poisoned"))?;
-                    let mut w = &*entry.pty;
-                    w.write_all(&payload)?;
-                    w.flush()?;
-                    Ok::<(), anyhow::Error>(())
-                })
-                .await;
-                match result {
-                    Ok(Ok(())) => DaemonToClient::Ok,
-                    Ok(Err(e)) => DaemonToClient::Error {
-                        code: ErrorCode::Internal,
-                        message: format!("write to {name} failed: {e}"),
-                    },
-                    Err(e) => DaemonToClient::Error {
-                        code: ErrorCode::Internal,
-                        message: format!("send task panicked: {e}"),
-                    },
+            Some(entry) => match entry.kind {
+                AgentKind::Spawned {
+                    pty, write_lock, ..
+                } => {
+                    // Write on the blocking pool; the PTY writer is std::io,
+                    // and we don't want to stall the async runtime.
+                    let result = tokio::task::spawn_blocking(move || {
+                        let _guard = write_lock
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("write lock poisoned"))?;
+                        let mut w = &*pty;
+                        w.write_all(&payload)?;
+                        w.flush()?;
+                        Ok::<(), anyhow::Error>(())
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(())) => DaemonToClient::Ok,
+                        Ok(Err(e)) => DaemonToClient::Error {
+                            code: ErrorCode::Internal,
+                            message: format!("write to {name} failed: {e}"),
+                        },
+                        Err(e) => DaemonToClient::Error {
+                            code: ErrorCode::Internal,
+                            message: format!("send task panicked: {e}"),
+                        },
+                    }
                 }
-            }
+                AgentKind::Registered => DaemonToClient::Error {
+                    code: ErrorCode::NoPty,
+                    message: no_pty_message(&name),
+                },
+            },
             None => DaemonToClient::Error {
                 code: ErrorCode::NotFound,
                 message: format!("no agent named {name}"),
@@ -310,6 +352,26 @@ async fn handle_oneshot(
                 message: "this message is only valid during an active attach".into(),
             }
         }
+    }
+}
+
+fn handle_register(registry: &Registry, name: &str) -> DaemonToClient {
+    if let Err(e) = validate_agent_name(name) {
+        return DaemonToClient::Error {
+            code: ErrorCode::InvalidName,
+            message: format!("invalid name: {e:#}"),
+        };
+    }
+    let entry = AgentEntry::registered(name.to_string());
+    match registry.insert(entry) {
+        Ok(()) => {
+            debug!(agent = %name, "registered virtual agent");
+            DaemonToClient::Ok
+        }
+        Err(e) => DaemonToClient::Error {
+            code: ErrorCode::NameTaken,
+            message: format!("{e:#}"),
+        },
     }
 }
 
@@ -398,6 +460,24 @@ async fn handle_attach(
         return Ok(());
     };
 
+    let AgentKind::Spawned {
+        pty,
+        write_lock,
+        inbox,
+        ..
+    } = entry.kind.clone()
+    else {
+        protocol::write_msg(
+            writer,
+            &DaemonToClient::Error {
+                code: ErrorCode::NoPty,
+                message: no_pty_message(&name),
+            },
+        )
+        .await?;
+        return Ok(());
+    };
+
     if entry
         .attached
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -418,14 +498,14 @@ async fn handle_attach(
     };
 
     // Resize the PTY to the client's terminal before any output is sent.
-    apply_resize(&entry, initial_size);
+    apply_resize(&pty, &name, initial_size);
 
     protocol::write_msg(writer, &DaemonToClient::Ok).await?;
 
     let Some(SubscribeReply {
         backlog,
         mut events,
-    }) = entry.inbox.subscribe().await
+    }) = inbox.subscribe().await
     else {
         protocol::write_msg(
             writer,
@@ -478,25 +558,26 @@ async fn handle_attach(
                 };
                 match msg {
                     ClientToDaemon::Stdin(bytes) => {
-                        let entry_for_write = entry.clone();
+                        let pty_for_write = Arc::clone(&pty);
+                        let lock_for_write = Arc::clone(&write_lock);
                         let agent_for_log = name.clone();
                         // Result discarded: panics from the closure are
                         // already logged inside it via tracing; the outer
                         // task can't meaningfully recover.
                         #[allow(clippy::let_underscore_must_use)]
                         let _ = tokio::task::spawn_blocking(move || {
-                            let Ok(_guard) = entry_for_write.write_lock.lock() else {
+                            let Ok(_guard) = lock_for_write.lock() else {
                                 warn!("write lock poisoned for {agent_for_log}, dropping stdin chunk");
                                 return;
                             };
-                            let mut w = &*entry_for_write.pty;
+                            let mut w = &*pty_for_write;
                             if let Err(e) = w.write_all(&bytes).and_then(|()| w.flush()) {
                                 debug!("stdin write to {agent_for_log} failed (PTY likely gone): {e}");
                             }
                         }).await;
                     }
                     ClientToDaemon::Resize(sz) => {
-                        apply_resize(&entry, sz);
+                        apply_resize(&pty, &name, sz);
                     }
                     ClientToDaemon::Detach => {
                         protocol::write_msg(writer, &DaemonToClient::Ok).await?;
@@ -517,11 +598,11 @@ async fn handle_attach(
     Ok(())
 }
 
-fn apply_resize(entry: &AgentEntry, size: TermSize) {
-    if let Err(e) = entry.pty.resize(Size::new(size.rows, size.cols)) {
+fn apply_resize(pty: &pty_process::blocking::Pty, name: &str, size: TermSize) {
+    if let Err(e) = pty.resize(Size::new(size.rows, size.cols)) {
         debug!(
             "resize to {}x{} failed for {} (PTY likely gone): {e}",
-            size.rows, size.cols, entry.name
+            size.rows, size.cols, name
         );
     }
 }

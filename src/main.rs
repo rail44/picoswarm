@@ -66,6 +66,10 @@ fn main() -> anyhow::Result<()> {
             init_client_tracing();
             client_runtime().block_on(client::event::run(event))
         }
+        cli::Command::Register { name } => {
+            init_client_tracing();
+            client_runtime().block_on(client::register::run(name))
+        }
         cli::Command::Inbox { command } => match command {
             cli::InboxCommand::Post { to, body, from } => {
                 init_client_tracing();

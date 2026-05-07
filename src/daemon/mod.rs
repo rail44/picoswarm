@@ -9,6 +9,8 @@ mod server;
 mod session;
 mod spawner;
 
+pub use session::validate_agent_name;
+
 pub fn run() -> anyhow::Result<()> {
     lifecycle::start()
 }

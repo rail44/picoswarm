@@ -118,6 +118,21 @@ pub enum Command {
         #[arg(value_enum)]
         event: Event,
     },
+    /// Register the calling session as a virtual (PTY-less) agent.
+    ///
+    /// Used by drivers — Claude sessions that orchestrate other agents
+    /// — to take a unique identity in the registry, get an inbox, and
+    /// record lifecycle events, without the daemon spawning a child
+    /// process. The entry shows in `pswarm ls` with status
+    /// `registered`; the PTY-bound subcommands (`send`, `view`,
+    /// `attach`, `cwd`) reject it with a clear error. Remove with
+    /// `pswarm rm <name>`.
+    Register {
+        /// Unique name for the registered agent. Same constraints as
+        /// `pswarm run` names: 1–64 chars, ASCII alphanumeric plus
+        /// `.`, `_`, `-`, and not the literal `self`.
+        name: String,
+    },
     /// Inter-agent message inbox (file-backed; no daemon mediation).
     ///
     /// Each agent has an append-only JSON Lines file at

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Hard cap on a single frame's payload size, to keep a malformed length
 /// prefix from triggering an arbitrarily large allocation.
@@ -36,6 +36,9 @@ pub struct RunRequest {
 pub enum AgentStatus {
     Running,
     Dead,
+    /// PTY-less entry created by `pswarm register`. Has an inbox and
+    /// can record lifecycle events but does not own a child process.
+    Registered,
 }
 
 /// Lifecycle events an agent (or its plugin glue) can report back to
@@ -93,6 +96,15 @@ pub enum ErrorCode {
     /// Returned by `Shutdown` when one or more agents have an attached
     /// client and the request did not set `force`.
     ActiveAttachments,
+    /// Returned when a request that needs a PTY (`Send`, `View`,
+    /// `Attach`, `GetCwd`) targets an entry created by `Register`.
+    /// Such entries have no child process, only an inbox and event slot.
+    NoPty,
+    /// Returned when a request supplies an agent name that fails the
+    /// shared name validation (length, allowed chars, reserved
+    /// literals). Distinguished from `Internal` so clients can tell a
+    /// user typo from a daemon bug.
+    InvalidName,
     Internal,
 }
 
@@ -154,6 +166,17 @@ pub enum ClientToDaemon {
     Event {
         name: String,
         event: Event,
+    },
+    /// Register a virtual (PTY-less) agent. Used by drivers — Claude
+    /// sessions that orchestrate spawned agents — to take a unique
+    /// identity in the registry, get an inbox, and record lifecycle
+    /// events, without the daemon spawning a child process for them.
+    /// The entry shows in `pswarm ls` with status `Registered`; the
+    /// PTY-bound subcommands (`send`, `view`, `attach`, `cwd`) reject
+    /// it with `ErrorCode::NoPty`. Daemon responds with `Ok` or
+    /// `Error { NameTaken, ... }`.
+    Register {
+        name: String,
     },
 }
 

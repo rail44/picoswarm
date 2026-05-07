@@ -50,6 +50,27 @@ async fn list_agents(daemon: &TestDaemon) -> Vec<picoswarm::protocol::AgentSumma
     }
 }
 
+async fn register_agent(daemon: &TestDaemon, name: &str) -> Result<(), (ErrorCode, String)> {
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Register {
+            name: name.to_string(),
+        },
+    )
+    .await
+    .expect("write Register");
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read Register response")
+    {
+        DaemonToClient::Ok => Ok(()),
+        DaemonToClient::Error { code, message } => Err((code, message)),
+        other => panic!("expected Ok/Error, got {other:?}"),
+    }
+}
+
 async fn rm_agent(daemon: &TestDaemon, name: &str, force: bool) -> Result<(), (ErrorCode, String)> {
     let mut stream = daemon.connect().await;
     let (mut reader, mut writer) = stream.split();
@@ -614,4 +635,172 @@ async fn agent_name_env_is_injected() {
         "selfname",
         "PSWARM_AGENT_NAME should match the spawn request's name",
     );
+}
+
+#[tokio::test]
+async fn register_then_ls_lists_agent_as_registered() {
+    let daemon = TestDaemon::start();
+
+    register_agent(&daemon, "drv")
+        .await
+        .expect("register should succeed");
+
+    let agents = list_agents(&daemon).await;
+    assert_eq!(agents.len(), 1, "expected exactly one agent");
+    let agent = &agents[0];
+    assert_eq!(agent.name, "drv");
+    assert_eq!(agent.status, AgentStatus::Registered);
+    assert!(
+        agent.cwd.is_none(),
+        "registered agent should have no cwd, got {:?}",
+        agent.cwd
+    );
+}
+
+#[tokio::test]
+async fn register_duplicate_returns_name_taken() {
+    let daemon = TestDaemon::start();
+
+    register_agent(&daemon, "drv")
+        .await
+        .expect("first register");
+    let err = register_agent(&daemon, "drv")
+        .await
+        .expect_err("second register should fail");
+    assert_eq!(err.0, ErrorCode::NameTaken);
+}
+
+#[tokio::test]
+async fn register_after_rm_succeeds() {
+    let daemon = TestDaemon::start();
+
+    register_agent(&daemon, "drv").await.expect("register");
+    rm_agent(&daemon, "drv", false).await.expect("rm");
+    register_agent(&daemon, "drv")
+        .await
+        .expect("re-register after rm should succeed");
+
+    let agents = list_agents(&daemon).await;
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].status, AgentStatus::Registered);
+}
+
+#[tokio::test]
+async fn send_to_registered_agent_returns_no_pty() {
+    let daemon = TestDaemon::start();
+
+    register_agent(&daemon, "drv").await.expect("register");
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Send {
+            name: "drv".to_string(),
+            payload: b"hi\n".to_vec(),
+        },
+    )
+    .await
+    .expect("write Send");
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read response")
+    {
+        DaemonToClient::Error { code, message } => {
+            assert_eq!(code, ErrorCode::NoPty);
+            assert!(
+                message.contains("registered") && message.contains("PTY-less"),
+                "expected message to call out PTY-less status, got {message:?}"
+            );
+        }
+        other => panic!("expected NoPty error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn clean_leaves_registered_alone() {
+    // Pin the design property that Registered entries are not subject
+    // to dead-process sweeping: prune_dead only collects Spawned
+    // entries whose `dead` flag flipped, and a Registered entry has
+    // no process to die.
+    let daemon = TestDaemon::start();
+
+    register_agent(&daemon, "drv").await.expect("register");
+
+    // Spawn a doomed PTY agent that exits immediately so Clean has at
+    // least something to remove — proves the sweep ran without
+    // touching the registered entry.
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Run(RunRequest {
+            name: "doomed".to_string(),
+            cmd: vec!["/bin/sh".to_string(), "-c".to_string(), "true".to_string()],
+            cwd: None,
+            env: Vec::new(),
+            initial_size: TermSize { rows: 24, cols: 80 },
+        }),
+    )
+    .await
+    .expect("write Run");
+    #[allow(clippy::let_underscore_must_use)]
+    let _ = protocol::read_msg::<DaemonToClient, _>(&mut reader).await;
+    drop(stream);
+
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(&mut writer, &ClientToDaemon::Clean)
+        .await
+        .expect("write Clean");
+    let removed = match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read Cleaned")
+    {
+        DaemonToClient::Cleaned { removed } => removed,
+        other => panic!("expected Cleaned, got {other:?}"),
+    };
+    assert_eq!(removed, vec!["doomed".to_string()]);
+
+    let agents = list_agents(&daemon).await;
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].name, "drv");
+    assert_eq!(agents[0].status, AgentStatus::Registered);
+}
+
+#[tokio::test]
+async fn event_recorded_for_registered_agent() {
+    let daemon = TestDaemon::start();
+    register_agent(&daemon, "drv").await.expect("register");
+
+    let mut stream = daemon.connect().await;
+    let (mut reader, mut writer) = stream.split();
+    protocol::write_msg(
+        &mut writer,
+        &ClientToDaemon::Event {
+            name: "drv".to_string(),
+            event: Event::Idle,
+        },
+    )
+    .await
+    .expect("write Event");
+    match protocol::read_msg::<DaemonToClient, _>(&mut reader)
+        .await
+        .expect("read Event response")
+    {
+        DaemonToClient::Ok => {}
+        other => panic!("expected Ok, got {other:?}"),
+    }
+    drop(stream);
+
+    let summaries = list_agents(&daemon).await;
+    let entry = summaries
+        .iter()
+        .find(|s| s.name == "drv")
+        .expect("agent in list");
+    let (recorded, _ts) = entry.last_event.expect("last_event populated");
+    assert_eq!(recorded, Event::Idle);
+    assert_eq!(entry.status, AgentStatus::Registered);
 }
