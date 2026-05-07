@@ -1,12 +1,20 @@
 # Issues
 
-A finer-grained backlog that complements `docs/plan.md` (which holds
-overall direction). Each entry is a candidate unit of work; whether
-to actually pick one up is a separate decision.
+A historical record of friction observed in picoswarm, plus a small
+backlog when there is currently-felt pain that is not yet resolved.
 
-> Note: some duplication with `docs/plan.md` is intentional. The
-> issues list is meant to be triage-friendly; the plan is meant to
-> hold the larger direction.
+## Principle
+
+**Issue = current pain.** A new issue file is filed when something
+genuinely hurts *now* — a daily annoyance during use, a recurring
+bug, a feature gap that blocks something the user wants to do today.
+Speculative "we might want this someday" entries do not earn a file;
+they live (briefly) in this index as struck-through history with a
+note about what trigger would justify refiling.
+
+This convention emerged from a sweep on 2026-05-07 that drained the
+backlog of speculative entries — see the strikethrough entries below
+for what was considered and dropped, with refile triggers attached.
 
 ## Index
 
@@ -14,8 +22,10 @@ to actually pick one up is a separate decision.
 
 - ~~01 PaneHost (kitty adapter)~~ — moved out of scope (composition +
   `docs/integration.md`, see decision-log #13)
-- [02 Agent self-invocation (env injection + send-to-self guard)](02-agent-self-invocation.md)
-  — deferred (revisit when a feature needing `self` is in scope)
+- ~~02 Agent self-invocation (env injection + send-to-self guard)~~ —
+  partially resolved (env injection landed via decision-log #17 / #18);
+  the send-to-self loop guard was speculative and dropped — refile if
+  a real self-loop bug appears
 - ~~03 `pswarm send` subcommand~~ — resolved (text + stdin + auto-newline,
   protocol bump 4→5)
 - ~~04 Sync `docs/protocol.md`~~ — resolved (protocol.md updated to v4
@@ -25,9 +35,9 @@ to actually pick one up is a separate decision.
 
 - ~~05 Agent lifecycle log~~ — dropped (no concrete consumer with
   recovery out of scope; decision-log #14 records the parking note)
-- [06 Concurrent client attach (read-only observers)](06-multi-client-readonly-attach.md)
-  — deferred (revisit when #02 lands or `pswarm view` polling becomes
-  painful)
+- ~~06 Concurrent client attach (read-only observers)~~ — speculative;
+  refile when `pswarm view` polling becomes painful or a multi-watcher
+  use case lands
 - ~~07 Screen restoration on reattach (VT parser)~~ — dropped (the
   "biggest friction" framing was speculation, not observed pain;
   refile when it actually hurts)
@@ -45,11 +55,10 @@ to actually pick one up is a separate decision.
   / powershell)
 - ~~14 PTY size policy when no client is attached~~ — resolved (keep
   last; documented)
-- [15 Config file (`config.toml`)](15-config-file-toml.md) — deferred
-  (revisit when a downstream feature needs persistent settings)
-- [16 Tag / link / parent-child relationships](16-tag-link-relationships.md)
-  — deferred (revisit at 5+ agents regularly, or when #02 makes
-  `--parent self` natural)
+- ~~15 Config file (`config.toml`)~~ — speculative; refile when a
+  downstream feature actually needs persistent settings
+- ~~16 Tag / link / parent-child relationships~~ — speculative; refile
+  when 5+ concurrent agents become routine
 - ~~17 Daemon log rotation~~ — resolved (tracing-appender daily rotation,
   7-day retention; crash log separated)
 - ~~21 Orphan agent prevention on hard daemon crash~~ — resolved (swapped
@@ -58,61 +67,60 @@ to actually pick one up is a separate decision.
   refuses while clients are attached; `-f` to override; protocol
   bump 6→7)
 - ~~24 `pswarm send` of multi-line text does not submit~~ — resolved
-  (wrap multi-line payloads in bracketed-paste markers so the trailing
-  CR lands outside the paste and reads as Enter)
+  (wrap multi-line payloads in bracketed-paste markers + send the CR
+  in a separate request so Claude's placeholder transition lands
+  before the Enter)
 - ~~26 Hook firing observability~~ — resolved (daemon now logs every
   `pswarm event` arrival: `debug!` on success, `warn!` on rejection,
   rotated daily log file is the diagnostic surface)
-- [28 Forward agent permission prompts without an attach](28-permission-prompt-forwarding.md)
-  — open (detached drivers stall the moment any agent asks a question)
+- ~~28 Forward agent permission prompts without an attach~~ — depends
+  on agent-side hook/tool ecosystem evolution; refile if a usable
+  surface emerges (memory `project_approval_forwarding_future`
+  records the desired direction)
 
 ### Low (only when requirements firm up)
 
-- [18 TUI view (`pswarm tui`) as a complementary view](18-tui-secondary-view.md)
-  — deferred (revisit at 10+ agents regularly or when a watch-style
-  refresh need emerges)
-- [23 Wait for an agent event programmatically](23-wait-for-event-primitive.md)
-  — reframed (the original friction is solved by an `until`-loop
-  pattern; only `pswarm watch` streaming for multi-agent driving
-  remains as a possible follow-up)
+- ~~18 TUI view (`pswarm tui`) as a complementary view~~ — speculative;
+  refile when 10+ agents become routine or watch-style refresh
+  becomes painful
 - ~~19 Cross-host support~~ — rejected as out of scope
 - ~~20 Expose pswarm as an MCP server~~ — rejected (Bash-tool path is
   sufficient and MCP itself is in a plateau; revisit only if a real
   cross-vendor consumer surfaces)
-- [25 Protocol bumps require a manual daemon restart](25-protocol-mismatch-manual-restart.md)
-  — open (one-time-per-bump cost; cryptic first error)
-- [27 `pswarm view` output is unreadable for humans](27-view-output-is-raw-vt.md)
-  — reframed (the original "did the prompt get through?" friction is
-  obviated by the event-based workflow shipped in #24 + #26; the
-  remaining valid `view` use cases all want raw bytes, which is what
-  the implementation already returns)
+- ~~23 Wait for an agent event programmatically~~ — obviated by
+  `until <jq on pswarm ls>; do sleep 0.3; done` pattern; the
+  `pswarm watch` streaming follow-on is speculative — refile when
+  multi-agent driving needs streaming
+- ~~25 Protocol bumps require a manual daemon restart~~ — workaround
+  (`pswarm daemon stop`) is fine; refile if rebuild cycles get slow
+  enough to matter
+- ~~27 `pswarm view` output is unreadable for humans~~ — obviated by
+  the event-based workflow (#24 + #26); the VT-decoder follow-on is
+  speculative — refile when programmatic text capture becomes a real
+  need
 
 ## Template
-
-New issues should follow this template. Sections expand as the issue
-moves through states — file the *why* first, then the *how* once it
-has been worked out.
 
 ```markdown
 # <Title>
 
 - **Priority:** <High | Medium | Low>
-- **Status:** <Open | Deferred | In progress | …>
+- **Status:** Open
 
 ### Description
 
 - **Summary:** brief framing of the problem
-- **Impact:** what improves / what we lose by not doing this
+- **Impact:** what specifically hurts right now
 
 ### Symptoms observed
 
-- concrete examples of the friction in actual use
-- (optional but valuable for "pain first, approach later" issues)
+- concrete, recent examples of the friction
+- timestamps / commits that reproduce help
 
 ### Approaches considered
 
-- TBD when the issue is filed for the pain only
-- otherwise, a list of candidate implementations with trade-offs:
+- TBD when filed for the pain alone
+- otherwise, candidate implementations with trade-offs:
   1. **<approach name>** (size/difficulty): description and tradeoff
   2. **<approach name>** ...
 
@@ -120,17 +128,11 @@ has been worked out.
 
 - related code `path/to/file.rs:LL`
 - related docs `docs/...`
-- external links
 - related issues: #NN
 ```
 
-In practice issues land in one of two shapes:
-
-- **Pain first.** The friction is concrete and reproducible, but the
-  right shape of the fix is open. File with `Approaches considered:
-  TBD`; flesh out before implementing.
-- **Approach in hand.** The path is clear but the work is blocked on
-  something else. File with the candidate approaches up front so the
-  next person can pick one up directly.
-
-Either shape is fine — the index just tracks what's open.
+A new file is filed only when there is concrete pain *now*. If the
+strongest framing is "we might want this someday", that's not an
+issue — leave it for when the pain shows up. The strikethrough
+entries above each carry a refile trigger so future-us can recognise
+when the pain has actually arrived.
