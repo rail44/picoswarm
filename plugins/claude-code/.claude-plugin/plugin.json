@@ -1,6 +1,6 @@
 {
   "name": "picoswarm",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Forward Claude Code lifecycle (SessionStart / Stop / Notification / SessionEnd) to the picoswarm daemon as agent events, and ship `delegate` (orchestrate a child agent) plus `diagnose` (troubleshoot pswarm misbehaviour) skills.",
   "repository": "https://github.com/rail44/picoswarm",
   "license": "MIT"

@@ -215,6 +215,31 @@ End-of-task:
 5. `pswarm rm <name>` deletes the agent + its inbox JSONL + cursor
    file. For multi-step work, leave the child running and continue.
 
+## Scaling to N children
+
+Dispatching N children is N `delegate` calls — the single-child rules
+carry directly. The N-specific deltas:
+
+- **Unique names**: task-specific labels (`feature-impl`,
+  `bug-triage`) or numeric suffixes (`worker-1` … `worker-N`).
+  Collisions surface as `NameTaken` at spawn. Use `pswarm register`
+  for the parent's own identity to avoid driver-vs-driver inbox
+  collisions.
+- **Per-child briefs > one broadcast**. Each child gets a scoped
+  sub-task with its file regions / modules called out explicitly,
+  so concurrent edits don't conflict. This is delegate's "pre-plan
+  upstream" rule scaled: divide before dispatching, not after.
+- **Synchronisation**: wait for N `done` posts (a counter on the
+  parent's Monitor side) or for each child's `last_event` to flip.
+  Decide up front whether one child's failure aborts the rest or
+  the others continue.
+- **Resource ceiling**: ~4 concurrent children is the practical
+  limit for a human watching kitty splits, plus API throughput
+  costs scale linearly.
+
+A future `picoswarm:fanout` skill is not planned — at this scope the
+guidance fits in one section.
+
 ## Common pitfalls
 
 - **Stale `pswarm` binary on `$PATH`.** A previous `cargo install` may
