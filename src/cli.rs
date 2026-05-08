@@ -30,6 +30,12 @@ pub enum Command {
         /// Spawn the agent and return immediately instead of attaching.
         #[arg(long, short)]
         detach: bool,
+        /// Spawn the agent in the background, then fire the `[spawn]
+        /// command` template from `config.toml` (typically opens a new
+        /// terminal tab/split that attaches to the agent). Mutually
+        /// exclusive with `--detach`.
+        #[arg(long, conflicts_with = "detach")]
+        spawn: bool,
         /// Command and arguments to run. Defaults to `claude`. Use `--` to separate from pswarm flags.
         #[arg(last = true)]
         cmd: Vec<String>,

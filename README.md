@@ -89,17 +89,31 @@ pswarm completions fish > ~/.config/fish/completions/pswarm.fish
 ### Configuration
 
 Optional file at `~/.config/picoswarm/config.toml` (created by you;
-not generated). Currently exposes only the detach key:
+not generated). Two sections today:
 
 ```toml
 [keybind]
 detach = "ctrl+\\"   # default; or 'ctrl+\' as a TOML literal string
+
+[spawn]
+# argv array, exec'd directly (no shell). {name} is substituted per
+# element. Fired by `pswarm run --spawn <name>`. Unknown placeholders
+# error at parse time.
+command = ["kitty", "@", "launch", "--type=tab", "--tab-title", "{name}",
+           "pswarm", "attach", "{name}"]
 ```
 
-`ctrl+<char>` form, single ASCII character. Other notations
-(`C-\`, `<C-\>`, …) and named keys (`space`, `enter`) are not yet
-supported — extend `src/config.rs::parse_detach_key` if you need
-them.
+`[keybind] detach`: `ctrl+<char>` form, single ASCII character.
+Named keys (`space`, `enter`) and other notations (`C-\`, `<C-\>`,
+…) are not yet supported — extend `src/config.rs::parse_detach_key`
+if you need them.
+
+`[spawn] command`: the array runs as you, with no shell
+interpretation, every time you call `pswarm run --spawn`. This is
+one of many command-execution surfaces a process with write access
+to your home directory can already use (`.bashrc`, `$PATH`, …); it
+is *not* specially defended. See `docs/decision-log.md` #22 for the
+threat model and the per-directory-config deferral.
 
 ### Daemon logs
 

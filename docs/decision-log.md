@@ -1069,3 +1069,100 @@ project-blessed identifiers.
 - `src/paths.rs::config_path` — XDG resolution
 - `src/client/attach.rs` — `DetachTrigger` consumer
 
+## 22. `[spawn]` template in `config.toml`, defended only by no-shell + transparency; per-directory configs deferred
+
+### What we decided
+
+`config.toml` gains a `[spawn]` section. Its `command` field is an
+argv array that `pswarm run --spawn <name>` executes after the agent
+is registered, with `{name}` substituted per-element. Example:
+
+```toml
+[spawn]
+command = ["kitty", "@", "launch", "--type=tab", "--tab-title", "{name}",
+           "pswarm", "attach", "{name}"]
+```
+
+The defenses we *do* implement:
+
+- **L1 (no shell)**: argv is exec'd via
+  `Command::new(argv[0]).args(&argv[1..])`. Shell metacharacters
+  (`;`, `|`, `$()`, etc.) carry no meaning. Tested.
+- **L2 (1→1 element substitution)**: substitution happens within a
+  single argv element; substituted values never re-tokenize. Even a
+  `{name}` value containing whitespace stays one argv element.
+- **L3 (placeholder allowlist)**: only `{name}` is recognized.
+  Unknown placeholders error at resolve time. `{cwd}` and friends
+  will be added on demand.
+- **L4 (variable-value validation)**: NUL and newline in the
+  agent name are rejected even though `validate_agent_name` should
+  already have blocked them — defense in depth.
+- **L7 (no registry rollback on spawn failure)**: spawn template
+  resolution happens *before* registering the agent so a config
+  error doesn't strand a registered agent.
+- **α (transparent argv printout)**: `[spawn] <argv>` is printed
+  to stderr immediately before exec, so the user can spot a
+  tampered template.
+
+### What we explicitly do *not* defend against
+
+We considered an L5 — restricting argv[0] to an allowlist of known
+terminal binaries (`kitty`, `tmux`, `wezterm`, …) — and dropped it.
+Reasons (mostly arrived at via the user's own framing, with a
+research pass on prior art):
+
+1. **For a `~/.config`-only config, attacker-side defenses are
+   pointless.** A process with write access to
+   `~/.config/picoswarm/config.toml` already has write access to
+   `~/.bashrc`, `~/.config/fish/conf.d/*`, `$PATH` directories
+   under `~/.local/bin`, and any number of equivalent
+   command-execution surfaces. Spending effort to harden the
+   picoswarm config specifically only forces the attacker to use
+   one of the dozen easier paths.
+2. **Allowlists punish the user, not the attacker.** Custom
+   terminals are increasingly common (Ghostty, Warp, Wave, Cosmic
+   Term, Rio, plus any user building their own). An allowlist that
+   makes those users opt-in becomes friction without buying real
+   safety, and once "opt-in to arbitrary spawn" becomes the norm
+   the allowlist is dead weight.
+3. **The ecosystem agrees.** A survey of direnv, mise, VSCode
+   Workspace Trust, pre-commit, npm/pnpm, gh extensions, cargo,
+   tmux, and kitty found no genuinely novel defense against a
+   same-UID attacker rewriting a user-writable config — every tool
+   either uses TOFU (vulnerable to simultaneous rewrite) or punts
+   to "audit before you trust." OS-level facilities that *would*
+   work (Linux IMA/EVM, BSD `schg`, TPM-bound signing) all require
+   root setup or hardware key provisioning, neither realistic for a
+   developer CLI's users.
+
+### Per-directory configs: deferred until a working defense exists
+
+Where defense *would* matter is **per-directory configs** — a
+`.picoswarmrc` style file that loads when the user `cd`s into
+a directory, so `git clone <attacker-repo> && cd attacker-repo`
+could activate attacker-controlled spawn commands. This is the
+threat direnv targets with its `direnv allow` flow.
+
+We are **not adding per-directory configs** until a working
+defense exists for them. direnv's allow flow is the canonical
+prior art and is at minimum a starting point, but it has known
+weaknesses (covered in the survey above) and the user's own
+take is that even direnv's behaviour is risky enough they
+prefer explicit `pass`-CLI loading over auto-loaded `.envrc`.
+Filing a future issue is unnecessary; the absence is the
+decision.
+
+### How we describe the threat model to users
+
+In documentation, plainly: "`config.toml` is a user-writable
+file under `~/.config/`. Anything with write access to that
+directory can already run arbitrary commands as you (`.bashrc`,
+`$PATH`, etc.); the `[spawn]` field is one of many such
+surfaces and is not specially defended." No safety theatre.
+
+### References
+
+- `src/config.rs::resolve_spawn_argv` — substitution + L1-L4
+- `src/client/run.rs` — spawn-firing site, α printout
+- `src/cli.rs` — `--spawn` flag, conflicts with `--detach`
+

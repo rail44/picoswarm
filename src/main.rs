@@ -26,9 +26,14 @@ fn main() -> anyhow::Result<()> {
             init_client_tracing();
             client_runtime().block_on(client::doctor::run())
         }
-        cli::Command::Run { name, detach, cmd } => {
+        cli::Command::Run {
+            name,
+            detach,
+            spawn,
+            cmd,
+        } => {
             init_client_tracing();
-            client_runtime().block_on(client::run::run(name, detach, cmd))
+            client_runtime().block_on(client::run::run(name, detach, spawn, cmd))
         }
         cli::Command::Ls { json, names } => {
             init_client_tracing();
