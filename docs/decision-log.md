@@ -988,3 +988,84 @@ were the wrong reference class. The user's pushback caught both;
 the only legitimate "skip" was orphan prevention, where the
 mechanism really is missing at the kernel layer.
 
+## 21. User config file: optional `config.toml`, MVP keybind only
+
+### What we decided
+
+picoswarm now reads `$XDG_CONFIG_HOME/picoswarm/config.toml` when
+present. The file is optional — absence falls through to compiled-in
+defaults. Parse failures error loudly rather than silently fall
+back, so a typo doesn't leave the user wondering why nothing
+changed. MVP schema:
+
+```toml
+[keybind]
+detach = "ctrl+\\"   # or 'ctrl+\' as a TOML literal string
+```
+
+The detach key is the only knob today. Other categories (terminal /
+multiplexer integration, default agent command, etc.) are kept out
+of the binary's config — see "What does *not* live in `config.toml`"
+below.
+
+### Why now, why this knob first
+
+Until now the detach key was hardcoded `Ctrl-\`. That's a fine
+default but not universal — `Ctrl-b`, `Ctrl-a`, and `Ctrl-q` are
+all in active use across tmux / screen / various REPLs, and a user
+whose muscle memory points elsewhere has no escape. One config
+entry resolves it without expanding the binary's surface area.
+
+### Notation: `ctrl+<char>`, plus-separated, lowercase modifier
+
+Surveyed CLI/terminal tools cluster around four notations:
+
+1. `C-\` (tmux, screen, GNU Emacs)
+2. `ctrl-\` (fzf, lazygit, gitui, bat, ripgrep `--bind`)
+3. **`ctrl+\` (kitty, zellij, VS Code, Zed, alacritty's string form)**
+4. `<C-\>` (Vim, Neovim)
+
+We picked #3 because it's the most popular form across the modern
+config-file-driven tools picoswarm sits next to (kitty and VS Code
+are the two most-likely user-facing references), and the
+plus-separator extends cleanly to future combos like `ctrl+shift+x`
+without notation churn. #1 / #2 don't extend as well; #4 reads
+poorly outside Vim's own config files. Personal preference of the
+sole current user was explicitly *not* used as the deciding factor
+— the schema is a public contract, not a dotfile.
+
+The `\` character is awkward in TOML basic strings (`"ctrl+\\"`
+needs escape) but TOML literal strings (`'ctrl+\'`) pass it through
+verbatim, so users who pick a backslash key get a clean spelling.
+
+### Implementation scope
+
+- Parser accepts exactly one `ctrl` modifier + a single ASCII
+  character. Unknown modifiers, multiple modifiers, and named keys
+  (`ctrl+space`, `ctrl+enter`) are rejected. Extending later is
+  additive.
+- The matcher in `src/client/attach.rs` derives both the C0 raw
+  byte (when one exists for that character — letters → `0x01..0x1a`,
+  `\` → `0x1c`, etc.) and the CSI-u sequence (`\e[<codepoint>;5u`)
+  from a single parsed `DetachTrigger`. Both forms are matched on
+  every stdin chunk, so the trigger fires regardless of whether
+  the agent has enabled kitty keyboard protocol level 1.
+
+### What does *not* live in `config.toml`
+
+Terminal / multiplexer integration (kitty tab vs tmux split etc.)
+is intentionally **not** in this file. That's the user's shell
+glue — a `pswarm-tab` / `pswarm-split` style fish/bash function
+under `~/.config/<shell>/conf.d/` — and decision #13 (PaneHost
+adapter rejection) still binds. A future `picoswarm:setup` skill
+will help users *generate* those shell helpers interactively, but
+the helpers themselves live in shell config, not picoswarm
+config. Names like `pst` / `pss` are personal short-forms, not
+project-blessed identifiers.
+
+### References
+
+- `src/config.rs` — parser + loader
+- `src/paths.rs::config_path` — XDG resolution
+- `src/client/attach.rs` — `DetachTrigger` consumer
+

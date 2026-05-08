@@ -17,6 +17,20 @@ pub fn socket_path() -> Result<PathBuf> {
     Ok(base.join("picoswarm").join("sock"))
 }
 
+/// `$XDG_CONFIG_HOME/picoswarm/` (default `~/.config/picoswarm/`).
+/// Optional user config like `config.toml` lives here.
+pub fn config_dir() -> Result<PathBuf> {
+    let dirs = base_dirs()?;
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map_or_else(|| dirs.home_dir().join(".config"), PathBuf::from);
+    Ok(base.join("picoswarm"))
+}
+
+/// Path to the optional user config file.
+pub fn config_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("config.toml"))
+}
+
 /// Directory holding the daemon's tracing logs (rotated daily) plus
 /// the small append-only crash log that captures stdout/stderr from
 /// the daemonized process.

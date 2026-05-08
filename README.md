@@ -54,7 +54,7 @@ design space. The shape comes from a handful of trade-offs:
 ```
 pswarm run -d feat-x -- claude --dangerously-skip-permissions
 pswarm ls
-pswarm attach feat-x        # Ctrl-\ to detach
+pswarm attach feat-x        # Ctrl-\ to detach (configurable, see below)
 pswarm view feat-x          # one-shot snapshot of recent output (no resize side effect)
 pswarm send feat-x "go"     # send text without attaching (or pipe via stdin)
 pswarm cwd feat-x           # print the agent's cwd
@@ -85,6 +85,21 @@ pswarm completions fish > ~/.config/fish/completions/pswarm.fish
 # bash:   pswarm completions bash >> ~/.bashrc
 # zsh:    pswarm completions zsh  >> ~/.zshrc
 ```
+
+### Configuration
+
+Optional file at `~/.config/picoswarm/config.toml` (created by you;
+not generated). Currently exposes only the detach key:
+
+```toml
+[keybind]
+detach = "ctrl+\\"   # default; or 'ctrl+\' as a TOML literal string
+```
+
+`ctrl+<char>` form, single ASCII character. Other notations
+(`C-\`, `<C-\>`, …) and named keys (`space`, `enter`) are not yet
+supported — extend `src/config.rs::parse_detach_key` if you need
+them.
 
 ### Daemon logs
 

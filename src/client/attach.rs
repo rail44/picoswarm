@@ -4,13 +4,14 @@
 //! the daemon as `Stdin`, prints every `Stdout` chunk back to the
 //! terminal, and watches `SIGWINCH` to keep the agent's PTY size in sync.
 //!
-//! Detach trigger: **`Ctrl-\`** (single key). Recognised in two encoding
-//! forms — the raw C0 byte `0x1c` (no keyboard protocol), and the CSI-u
-//! sequence `\e[92;5u` (kitty keyboard protocol level 1, "disambiguate
-//! escape codes"). Higher protocol levels (event types, associated text)
-//! are not currently supported; in real use Claude Code only enables
-//! level 1, but if that changes the matcher will silently miss the
-//! trigger and we'll need to extend it.
+//! Detach trigger: configured via `~/.config/picoswarm/config.toml`
+//! (default `ctrl+\`). The matcher recognises two encoding forms — the
+//! raw C0 byte (no keyboard protocol) and the CSI-u sequence
+//! `\e[<codepoint>;5u` (kitty keyboard protocol level 1,
+//! "disambiguate escape codes"). Higher protocol levels (event types,
+//! associated text) are not currently supported; in real use Claude
+//! Code only enables level 1, but if that changes the matcher will
+//! silently miss the trigger and we'll need to extend it.
 //!
 //! Diagnostic: setting `PSWARM_DEBUG_STDIN=/path/to/file` makes the
 //! attach client append every raw stdin chunk it sees (in `{:02x}` form)
@@ -25,6 +26,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
 use crate::client::connection;
+use crate::config::{self, DetachTrigger};
 use crate::protocol::{self, ClientToDaemon, DaemonToClient, TermSize};
 
 enum AttachExit {
@@ -35,6 +37,9 @@ enum AttachExit {
 
 pub async fn run(name: String) -> Result<()> {
     let initial_size = current_terminal_size().unwrap_or(TermSize { rows: 24, cols: 80 });
+
+    let cfg = config::load()?;
+    let trigger = config::parse_detach_key(&cfg.keybind.detach)?;
 
     let mut stream = connection::connect_with_handshake().await?;
     let (mut reader, mut writer) = stream.split();
@@ -57,7 +62,7 @@ pub async fn run(name: String) -> Result<()> {
     }
 
     terminal::enable_raw_mode().map_err(|e| anyhow!("enable_raw_mode: {e}"))?;
-    let result = stream_loop(&mut reader, &mut writer).await;
+    let result = stream_loop(&mut reader, &mut writer, trigger).await;
     if let Err(e) = terminal::disable_raw_mode() {
         eprintln!("[warning: failed to restore terminal mode: {e}]");
     }
@@ -73,7 +78,11 @@ pub async fn run(name: String) -> Result<()> {
     Ok(())
 }
 
-async fn stream_loop(reader: &mut ReadHalf<'_>, writer: &mut WriteHalf<'_>) -> Result<AttachExit> {
+async fn stream_loop(
+    reader: &mut ReadHalf<'_>,
+    writer: &mut WriteHalf<'_>,
+    trigger: DetachTrigger,
+) -> Result<AttachExit> {
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<ClientToDaemon>();
 
     // Stdin -> daemon. A blocking OS thread reads keystrokes from the
@@ -81,7 +90,7 @@ async fn stream_loop(reader: &mut ReadHalf<'_>, writer: &mut WriteHalf<'_>) -> R
     let stdin_tx = msg_tx.clone();
     let stdin_thread = std::thread::Builder::new()
         .name("pswarm-stdin".into())
-        .spawn(move || stdin_loop(&stdin_tx))
+        .spawn(move || stdin_loop(&stdin_tx, &trigger))
         .map_err(|e| anyhow!("failed to start stdin thread: {e}"))?;
 
     // SIGWINCH -> daemon.
@@ -142,7 +151,7 @@ async fn stream_loop(reader: &mut ReadHalf<'_>, writer: &mut WriteHalf<'_>) -> R
     Ok(exit)
 }
 
-fn stdin_loop(tx: &mpsc::UnboundedSender<ClientToDaemon>) {
+fn stdin_loop(tx: &mpsc::UnboundedSender<ClientToDaemon>, trigger: &DetachTrigger) {
     let stdin = std::io::stdin();
     let mut handle = stdin.lock();
     let mut buf = [0u8; 4096];
@@ -167,7 +176,7 @@ fn stdin_loop(tx: &mpsc::UnboundedSender<ClientToDaemon>) {
         let mut combined: Vec<u8> = std::mem::take(&mut leftover);
         combined.extend_from_slice(&buf[..n]);
 
-        if let Some((start, _len)) = find_detach_trigger(&combined) {
+        if let Some((start, _len)) = find_detach_trigger(&combined, trigger) {
             if start > 0
                 && tx
                     .send(ClientToDaemon::Stdin(combined[..start].to_vec()))
@@ -183,7 +192,7 @@ fn stdin_loop(tx: &mpsc::UnboundedSender<ClientToDaemon>) {
 
         // No full trigger yet. Hold back any tail bytes that could be the
         // start of a CSI-u trigger encoding still arriving.
-        let split = partial_prefix_at_end(&combined);
+        let split = partial_prefix_at_end(&combined, trigger);
         if split > 0
             && tx
                 .send(ClientToDaemon::Stdin(combined[..split].to_vec()))
@@ -197,13 +206,14 @@ fn stdin_loop(tx: &mpsc::UnboundedSender<ClientToDaemon>) {
     }
 }
 
-/// Look for `Ctrl-\` (raw `0x1c` or CSI-u `\e[92;5u`) anywhere in
-/// `bytes`. Returns `(start, encoding_len)` of the matched trigger.
-fn find_detach_trigger(bytes: &[u8]) -> Option<(usize, usize)> {
-    let csi_u = b"\x1b[92;5u";
+/// Look for the configured detach trigger anywhere in `bytes`. Returns
+/// `(start, encoding_len)` of the match — checking both the raw C0 byte
+/// (when one exists for this key) and the CSI-u sequence.
+fn find_detach_trigger(bytes: &[u8], trigger: &DetachTrigger) -> Option<(usize, usize)> {
+    let csi_u = trigger.csi_u.as_slice();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == 0x1c {
+        if Some(bytes[i]) == trigger.raw_byte {
             return Some((i, 1));
         }
         if bytes[i..].starts_with(csi_u) {
@@ -217,13 +227,13 @@ fn find_detach_trigger(bytes: &[u8]) -> Option<(usize, usize)> {
 /// Returns the index at which to split `bytes`. The caller should emit
 /// `bytes[..idx]` as `Stdin` and hold `bytes[idx..]` for the next read,
 /// because that suffix could be the beginning of a CSI-u trigger
-/// encoding (`\e[92;5u`) that has not finished arriving yet. The raw
-/// `0x1c` trigger is a single byte and never partial.
-fn partial_prefix_at_end(bytes: &[u8]) -> usize {
+/// encoding that has not finished arriving yet. The raw control byte
+/// trigger (when configured) is a single byte and never partial.
+fn partial_prefix_at_end(bytes: &[u8], trigger: &DetachTrigger) -> usize {
     if bytes.is_empty() {
         return 0;
     }
-    let csi_u = b"\x1b[92;5u";
+    let csi_u = trigger.csi_u.as_slice();
     let max = csi_u.len().min(bytes.len());
     for k in (1..=max).rev() {
         if bytes[bytes.len() - k..] == csi_u[..k] {
@@ -264,54 +274,72 @@ fn current_terminal_size() -> Option<TermSize> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
+    fn ctrl_backslash() -> DetachTrigger {
+        config::parse_detach_key("ctrl+\\").unwrap()
+    }
+
     #[test]
     fn raw_ctrl_backslash_triggers() {
-        assert_eq!(find_detach_trigger(b"\x1c"), Some((0, 1)));
+        assert_eq!(
+            find_detach_trigger(b"\x1c", &ctrl_backslash()),
+            Some((0, 1))
+        );
     }
 
     #[test]
     fn raw_ctrl_backslash_in_text_triggers() {
-        assert_eq!(find_detach_trigger(b"hello\x1cworld"), Some((5, 1)));
+        assert_eq!(
+            find_detach_trigger(b"hello\x1cworld", &ctrl_backslash()),
+            Some((5, 1))
+        );
     }
 
     #[test]
     fn csi_u_ctrl_backslash_triggers() {
         // CSI-u for Ctrl-\: codepoint 92 ('\\') with modifier 5 (Ctrl).
-        assert_eq!(find_detach_trigger(b"\x1b[92;5u"), Some((0, 7)));
+        assert_eq!(
+            find_detach_trigger(b"\x1b[92;5u", &ctrl_backslash()),
+            Some((0, 7))
+        );
     }
 
     #[test]
     fn csi_u_in_text_triggers() {
-        assert_eq!(find_detach_trigger(b"abc\x1b[92;5uend"), Some((3, 7)));
+        assert_eq!(
+            find_detach_trigger(b"abc\x1b[92;5uend", &ctrl_backslash()),
+            Some((3, 7))
+        );
     }
 
     #[test]
     fn unrelated_text_does_not_trigger() {
-        assert_eq!(find_detach_trigger(b"hello world"), None);
+        assert_eq!(find_detach_trigger(b"hello world", &ctrl_backslash()), None);
     }
 
     #[test]
     fn plain_backslash_does_not_trigger() {
         // Just '\\' (0x5c) without Ctrl is not Ctrl-\.
-        assert_eq!(find_detach_trigger(b"\\"), None);
+        assert_eq!(find_detach_trigger(b"\\", &ctrl_backslash()), None);
     }
 
     #[test]
     fn arrow_keys_do_not_trigger() {
         // \x1b[A = arrow up — not a prefix of \x1b[92;5u.
-        assert_eq!(find_detach_trigger(b"\x1b[A"), None);
+        assert_eq!(find_detach_trigger(b"\x1b[A", &ctrl_backslash()), None);
     }
 
     #[test]
     fn partial_csi_u_is_held() {
-        assert_eq!(partial_prefix_at_end(b"hello\x1b"), 5);
-        assert_eq!(partial_prefix_at_end(b"hello\x1b["), 5);
-        assert_eq!(partial_prefix_at_end(b"hello\x1b[9"), 5);
-        assert_eq!(partial_prefix_at_end(b"hello\x1b[92;"), 5);
-        assert_eq!(partial_prefix_at_end(b"hello\x1b[92;5"), 5);
+        let t = ctrl_backslash();
+        assert_eq!(partial_prefix_at_end(b"hello\x1b", &t), 5);
+        assert_eq!(partial_prefix_at_end(b"hello\x1b[", &t), 5);
+        assert_eq!(partial_prefix_at_end(b"hello\x1b[9", &t), 5);
+        assert_eq!(partial_prefix_at_end(b"hello\x1b[92;", &t), 5);
+        assert_eq!(partial_prefix_at_end(b"hello\x1b[92;5", &t), 5);
     }
 
     #[test]
@@ -320,17 +348,27 @@ mod tests {
         // caught by find_detach_trigger before partial_prefix_at_end ever
         // runs; if we reach this function it's because there's no match,
         // so 0x1c at the end should NOT be held back.
-        assert_eq!(partial_prefix_at_end(b"hello\x1c"), 6);
+        assert_eq!(partial_prefix_at_end(b"hello\x1c", &ctrl_backslash()), 6);
     }
 
     #[test]
     fn unrelated_escape_at_end_is_not_held() {
         // Arrow-up escape doesn't match a prefix of \x1b[92;5u.
-        assert_eq!(partial_prefix_at_end(b"hello\x1b[A"), 8);
+        assert_eq!(partial_prefix_at_end(b"hello\x1b[A", &ctrl_backslash()), 8);
     }
 
     #[test]
     fn empty_input() {
-        assert_eq!(partial_prefix_at_end(b""), 0);
+        assert_eq!(partial_prefix_at_end(b"", &ctrl_backslash()), 0);
+    }
+
+    #[test]
+    fn custom_trigger_ctrl_b() {
+        // Verify a non-default key also triggers correctly.
+        let t = config::parse_detach_key("ctrl+b").unwrap();
+        assert_eq!(find_detach_trigger(b"\x02", &t), Some((0, 1)));
+        assert_eq!(find_detach_trigger(b"\x1b[98;5u", &t), Some((0, 7)));
+        // Old default no longer fires.
+        assert_eq!(find_detach_trigger(b"\x1c", &t), None);
     }
 }
