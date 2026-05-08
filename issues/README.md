@@ -18,6 +18,13 @@ for what was considered and dropped, with refile triggers attached.
 
 ## Index
 
+### Open
+
+- [29 macOS daemon-hard-crash orphan prevention](29-macos-orphan-prevention.md)
+  — open (Linux installs `PR_SET_PDEATHSIG`; macOS has no kernel
+  equivalent and gets no orphan protection on hard crash; deferred
+  pending appetite for a kqueue-shim approach)
+
 ### High (foundational / differentiator-critical)
 
 - ~~01 PaneHost (kitty adapter)~~ — moved out of scope (composition +

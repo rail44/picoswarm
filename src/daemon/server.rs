@@ -36,6 +36,25 @@ fn no_pty_message(name: &str) -> String {
     format!("{name} is a registered (PTY-less) agent; only `event`, `inbox`, and `rm` apply to it")
 }
 
+/// Resolve the current working directory of a running process,
+/// cross-platform via `sysinfo`. Replaces a Linux-only
+/// `/proc/<pid>/cwd` symlink read so macOS reports cwd correctly
+/// too. Returns `None` when the pid is gone, the OS does not
+/// surface cwd for that process, or the refresh did not see it.
+fn cwd_of_pid(pid: u32) -> Option<std::path::PathBuf> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut system = System::new();
+    let target = Pid::from_u32(pid);
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[target]),
+        true,
+        ProcessRefreshKind::nothing().with_cwd(sysinfo::UpdateKind::Always),
+    );
+    system
+        .process(target)
+        .and_then(|p| p.cwd().map(std::path::Path::to_path_buf))
+}
+
 pub async fn run(socket_path: PathBuf, spawner: Spawner) -> Result<()> {
     if socket_path.exists() {
         match UnixStream::connect(&socket_path).await {
@@ -255,9 +274,8 @@ async fn handle_oneshot(
                             code: ErrorCode::NotFound,
                             message: format!("{name} has no live PID"),
                         },
-                        |p| {
-                            let path = std::fs::read_link(format!("/proc/{p}/cwd")).ok();
-                            DaemonToClient::AgentCwd { path }
+                        |p| DaemonToClient::AgentCwd {
+                            path: cwd_of_pid(p),
                         },
                     )
                 }

@@ -938,3 +938,53 @@ turn meant no protocol bump and no new daemon code beyond a few
 agents talk; the bigger questions (broadcast, topics, ack) are
 deferred until use forces them.
 
+## 20. Phase-1 macOS support: gate `prctl` to Linux, swap `/proc/<pid>/cwd` for `sysinfo`
+
+### What we decided
+
+picoswarm now builds and runs on macOS for everything except daemon
+hard-crash orphan prevention. Two changes:
+
+1. `nix::sys::prctl::set_pdeathsig` is Linux-only (`#[cfg(target_os
+   = "linux")]`); macOS spawns its agents without an automatic
+   parent-death signal hook.
+2. The daemon's `pswarm cwd` resolution moves off `/proc/<pid>/cwd`
+   onto the cross-platform `sysinfo` crate (`Process::cwd()`), so
+   macOS reports the agent's cwd correctly.
+
+`paths::*` already worked on macOS via the home-dir fallback when
+`XDG_*_HOME` is unset — CLI tools on macOS routinely use
+`~/.config` / `~/.local` (neovim, git, modern dotfile-managed CLIs),
+so no path-convention change was needed.
+
+### Why orphan prevention is deferred
+
+macOS has no kernel-level equivalent to `PR_SET_PDEATHSIG`. A real
+fix is the kqueue `EVFILT_PROC` + `NOTE_EXIT` shim pattern (~50–60
+LOC + new dep + a hidden `pswarm internal-watchdog` subcommand
+between fork and exec). The shape is settled but the implementation
+cost is more than Phase-1 wanted to spend up front. Tracked as
+`issues/29-macos-orphan-prevention.md`. Until it lands, macOS
+loses the orphan-prevention guarantee on hard crash; `pswarm
+daemon stop` (graceful) still cleans up correctly.
+
+### Why `sysinfo` over `libproc` + cfg-conditional
+
+`sysinfo` is ~one extra crate but unifies the cwd code path across
+both OSes — the daemon stops knowing about `/proc` at all. The
+alternative (`libproc` macOS-only + `/proc` Linux-only via cfg) is
+slightly leaner on deps but spreads the same logic across two
+branches. The unified path is easier to keep correct.
+
+### Reflection
+
+The original macOS plan I sketched ("gate `prctl`, leave `cwd`
+unimplemented on macOS, change paths to `~/Library/...`") was
+wrong on two of three counts: `pswarm cwd` is a real feature, not
+a debug-only crutch — leaving it unimplemented denies macOS users
+something Linux users have. And macOS-native paths are a GUI-app
+convention, not a CLI one — the ones I'd looked at as canonical
+were the wrong reference class. The user's pushback caught both;
+the only legitimate "skip" was orphan prevention, where the
+mechanism really is missing at the kernel layer.
+

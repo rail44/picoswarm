@@ -3,7 +3,9 @@
 //! `AgentEntry` that the registry can store.
 
 use anyhow::{Context, Result, anyhow};
+#[cfg(target_os = "linux")]
 use nix::sys::prctl;
+#[cfg(target_os = "linux")]
 use nix::sys::signal::Signal;
 use pty_process::Size;
 use pty_process::blocking::{Command, Pty, open};
@@ -62,6 +64,10 @@ pub fn spawn_session(req: RunRequest) -> Result<AgentEntry> {
 
     // PR_SET_PDEATHSIG: kernel SIGTERMs the child if the daemon dies
     // hard, preventing orphan agents reparented to init (issue #21).
+    // Linux-only — macOS has no kernel equivalent; the
+    // graceful-shutdown path still cleans up there, but a hard
+    // daemon crash on macOS leaves orphan agents (issue #29).
+    #[cfg(target_os = "linux")]
     unsafe {
         cmd = cmd.pre_exec(|| {
             prctl::set_pdeathsig(Signal::SIGTERM)
